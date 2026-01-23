@@ -1,0 +1,1218 @@
+PATCH VORBEREITUNG — ENTWURF → KANON TRANSFER (REORDER SKELETON)
+Datei: PATCH_VORBEREITUNG (K0–K10)
+
+VERSION: v1.0.11
+Stand: 2026-01-18
+Status: ENTWURF (Patch-Vorbereitung, enthält keine Norm-Inhalte aus ENTWURF)
+
+ZWECK
+- Diese Datei ist eine reine Patch-Vorbereitung / Reorder-Struktur.
+- Sie enthält KEINE kopierten Inhalte aus ENTWURF_SORTIERT_v1.txt.
+- Ziel: ENTWURF in eine driftarme Kapitelstruktur bringen, Doppelstellen eliminieren, späteres Patchen in den Kanon planbar machen.
+
+GRUNDREGELN (BINDEND FÜR DIESE DATEI)
+R1 Single-Anchor-Regel (SA):
+- Jedes Subsystem hat GENAU EINE normative Stelle (Single Anchor) in der neuen Struktur.
+- Alles andere wird Ref-only (nur Verweis auf SA-Kapitel/Abschnitt).
+
+R2 Ref-only-Regel:
+- Ref-only-Stellen dürfen NICHT neu erklären.
+- Ref-only = 1–2 Sätze + Verweis (Kapitel/Abschnitt) + ggf. Key-Namen.
+
+R3 Kein Kanon-Rewrite:
+- Kanon wird NICHT in diese Datei kopiert.
+- Wenn Kanon bereits etwas beantwortet, steht hier nur: "Kanon-Ref: Bxxx §…" + Delta-Hinweis (unverändert/ändern/ersetzen).
+
+R4 Ziel dieser Datei:
+- Reduktion von Dopplungen
+- bessere Widerspruchssichtbarkeit
+- saubere Transfer-Basis für späteren Kanon-Patch
+
+R5 PH-Orientierung:
+- Struktur ist Theme-first (Foundation → Derived).
+- PH-Bezüge werden als Tags in Überschriften gepflegt (z.B. [PH1], [PH3], [PH5]).
+
+====================================================================
+KAPITELSTRUKTUR (K0–K10)
+====================================================================
+K0 — META / Scope / Leseregeln
+[PH: alle]
+Single Anchor: NEIN (Meta only)
+
+Inhalt (K0 ist Meta — keine Normtexte aus ENTWURF einfügen):
+- ENTWURF-SOLL: Der ENTWURF definiert den Zielzustand (SOLL) für den späteren Kanon-Transfer.
+  Diese Datei ist die Transfer-/Arbeitsstruktur, nicht der Ort für Volltext-Dopplungen.
+- Kein Kanon-Rewrite: Kanon wird NICHT hierher kopiert. Wenn Kanon etwas bereits beantwortet,
+  wird nur referenziert (Kanon-Ref) und ggf. ein Delta beschrieben.
+- Ziel dieses Dokuments: ENTWURF in eine driftarme Struktur bringen, in der
+  (a) jede Regel genau einmal normativ steht (Single Anchor) und
+  (b) alle Wiederholungen nur noch Ref-only sind.
+- Arbeitsprinzipien:
+  1) Single Anchor (SA): Pro Subsystem genau 1 normative Stelle in K1–K9.
+  2) Ref-only: Alle weiteren Erwähnungen sind 1–2 Sätze + Verweis auf SA.
+  3) Merge zuerst: Doppelstellen werden nicht parallel gepflegt; sie werden zusammengeführt
+     oder zu Ref-only reduziert (siehe MERGE-PLAN).
+  4) Decision Register: “FEST”-Entscheidungen werden NICHT mehrfach im Text verteilt,
+     sondern als Register in K10 geführt (1 Satz + Verweis auf die normative SA-Stelle).
+  5) DoD: DoD-Details gehören kapitel-lokal (K3–K9); K10 enthält nur den Index.
+- Format-Konventionen (damit Referenzen stabil bleiben):
+  * Abschnitt-IDs: K0–K10 (diese Datei) + SA-Tags (SA-NET, SA-KEY, SA-ALLOC, SA-PROV, SA-STATE, SA-ENF, SA-SETTINGS, SA-IKE, SA-OPSUI).
+  * Ref-only-Format: "Ref-only: siehe Kx (SA-XYZ) – <kurzer Kontext>."
+  * Kanon-Ref-Format: "Kanon-Ref: Bxxx §<Abschnitt> – Delta: (unverändert | ändern | ersetzen)."
+  * Delta-Format (ohne Copy-Block): Ziel + Delta-Beschreibung + Constraints + Validierung.
+- ENTWURF-fest Logik (für später, wenn Inhalte eingehängt sind):
+  Sobald eine Frage/Entscheidung in der passenden SA-Stelle eindeutig festgezogen ist
+  und keine offenen Punkte dazu existieren, wird sie im Decision Register (K10) eingetragen
+  und die vorherige “offene Frage”-Notiz wird entfernt (keine Doppelpflege).
+Kanon-Refs (optional): (werden nur als Verweise geführt, kein Volltext)
+Delta-Hinweis: (wird pro späterem Transfer-Schritt gepflegt, nicht in K0)
+
+Ziel-B-Dateien (Mapping):
+- B010_META_SCOPE
+- B020_GOALS_TARGETS (nur wenn Scope/Targets betroffen)
+
+--------------------------------------------------------------------
+
+K1 — SA-NET — Netzmodell: Zonen / Pools / Service-Net / IP-Mapping
+[PH: PH1, PH3, PH4, PH5]
+Single Anchor: JA (SA-NET)
+
+Normative Regel (Single Definition):
+- Konkrete IPs/CIDRs/Service-Ziele werden NUR hier (K1) definiert.
+- Alle anderen Kapitel (z.B. K6 Enforcement, K9 Panel/Stats) nennen nur Symbolnamen + Verweis auf K1.
+- Ausnahme: Test-/Beispieltexte dürfen IPs enthalten, müssen dann aber explizit als "Beispiel" markiert sein.
+
+K1.1 Zonenmodell (Definitionen)
+(Platzhalter – Inhalte werden später aus ENTWURF B übernommen und hier konsolidiert)
+- Z0 SERVICE_NET: <CIDR v4> / <Prefix v6> – Zweck: Services (DNS/Web/NTP/Panel/etc)
+- Z1 ADMIN_NET:   <CIDR v4> / <Prefix v6> – Zweck: Admin-Zugriff/Management (falls vorgesehen)
+- Z2 LEGACY_NET:  <CIDR v4> / <Prefix v6> – Zweck: XP/Vista Clients
+- Z3 MODERN_NET:  <CIDR v4> / <Prefix v6> – Zweck: Modern Clients (optional)
+- Routing-Intention (kurz): Full-Tunnel + interne Services erreichbar, Peer-Isolation dort wo gefordert (Enforcement in K6)
+
+K1.2 Pools pro conn_group (Adressräume)
+(Platzhalter – später aus ENTWURF B übernehmen, aber hier als Single Source)
+- conn_group: <name>
+  * v4_pool: <range/CIDR>
+  * v6_pool: <prefix>
+  * Bemerkung: Exhaustion/Allocator-Logik ist SA-ALLOC (K3); K1 listet nur die Adressräume.
+
+K1.3 Service-Mapping (Symbolname -> v4/v6 Ziel)
+(Platzhalter – später aus ENTWURF übernehmen; diese Tabelle ist die EINZIGE Stelle mit harten IPs)
+- SERVICE_GW:   v4=<…>  v6=<…>  (optional, wenn Gateway als Service-IP modelliert)
+- SERVICE_DNS:  v4=<…>  v6=<…>  (AdGuard/Unbound Ziel)
+- SERVICE_WEB:  v4=<…>  v6=<…>  (Panel/Web/Blockpage Ziel)
+- SERVICE_NTP:  v4=<…>  v6=<…>  (falls NTP-Redirect geplant)
+- SERVICE_RADIUS/SQL: (optional; meist intern/Wiring, nur wenn als IP-Service relevant)
+
+Hinweis:
+- K6 (SA-ENF) referenziert ausschließlich SERVICE_* Symbole und verweist auf K1.3.
+
+K1.4 Namenskonventionen (damit Ref-only stabil bleibt)
+- Symbolnamen sind UPPER_SNAKE_CASE: SERVICE_DNS, SERVICE_WEB, SERVICE_NTP, …
+- Ref-only-Format (Beispiel): "Ref-only: DNS-Ziel = SERVICE_DNS (siehe K1.3)."
+
+K1.5 Kanon-Refs / Delta (nur Verweise, kein Volltext)
+- Kanon-Ref: B060 §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: (weitere, falls nötig) …
+- Delta-Hinweis: Wird erst beim tatsächlichen Transfer gepflegt (nicht beim Reorder).
+
+K1.DoD (nur Nachweis-Ideen, Details später in K10/B310)
+- Nachweis: jede harte IP/CIDR kommt exakt 1× in dieser Datei vor (K1.1/K1.3).
+- Nachweis: alle anderen Kapitel nutzen nur SERVICE_* Symbole + Verweis auf K1.
+
+Ziel-B-Dateien (Mapping):
+- B060_NETPLAN_IPS_SEGMENTS
+- B040_STACK_PROTOCOLS (nur soweit zonenabhängig)
+- (später DNS) B200_DNS_UNBOUND_ADGUARD, B210_DNS_ENFORCEMENT_DNAT53 (nur Verweise)
+
+--------------------------------------------------------------------
+
+K2 — SA-KEY — Policy-Key / SoT / Identity-Invarianten
+[PH: PH1, PH5]
+Single Anchor: JA (SA-KEY)
+
+Normative Regel (Single Definition):
+- Die Identitäts-/Policy-Key-Definitionen stehen NUR hier (K2).
+- Alle anderen Kapitel dürfen Keys/IDs nur nennen (Ref-only) und müssen auf K2 verweisen.
+- Ziel: keine “impliziten Keys” in Flows, keine Drift durch Mehrfachdefinitionen.
+
+K2.1 Primary Policy Key (Definition + Zweck)
+(Platzhalter – wird später aus ENTWURF A übernommen und hier konsolidiert)
+- PRIMARY_POLICY_KEY: <z.B. conn_group>
+- Zweck:
+  * bestimmt Adressraum-/Pool-Selektor (K1.2)
+  * bestimmt policy_apply/materialize Scope (K6 / K3)
+  * bestimmt Settings-Resolution Scope (K7)
+  * bestimmt Onboarding/State-Scoping (K5)
+- NICHT Zweck: <kurz aufzählen, was NICHT durch den Key bestimmt wird> (Drift-Guard)
+
+K2.2 Identity Objects (welche IDs existieren, auf welcher Ebene)
+(Platzhalter – später aus ENTWURF übernehmen)
+- customer_id: <…> (Scope: Tenant/Account)
+- vpn_connection_id: <…> (Scope: Connection Instance)
+- conn_group: <…> (Scope: Policy Group / Primary Key)
+- device_id / subaccount_id (optional): <…> (wenn Multi-Device vorgesehen)
+Hinweis:
+- K3 (Allocator) und K5 (State) dürfen NICHT “neue IDs” einführen; neue IDs gehören zuerst hierher.
+
+K2.3 Invarianten (Identity/Key Contract)
+(“muss immer gelten” – ohne konkrete Implementierungsdetails)
+- Immutable:
+  * PRIMARY_POLICY_KEY ist pro vpn_connection immutable (nach Erstellung nicht änderbar).
+  * Wenn ein Wechsel nötig ist: neuer vpn_connection Datensatz (keine Mutation).
+- Monotonic Facts (falls relevant):
+  * <z.B. created_at, revoked_at, email_verified_at> sind monotonic oder single-write (Regel festlegen, später konkretisieren).
+- Uniqueness-Scope:
+  * Welche Kombinationen dürfen doppelt existieren? (z.B. mehrere vpn_connections je customer, aber nicht identisch <…>)
+  * Der “physische” Uniqueness-Enforcement passiert im DB-Schema (K3/K5), aber die Norm-Regel steht hier.
+
+K2.4 SoT-Regeln (wo ist Wahrheit, wo ist Ableitung)
+- Source of Truth (SoT) ist gespeichert (DB-Facts); abgeleitete States/Views sind computed (effective_state etc).
+- Wenn eine Ableitung von einem gespeicherten Fact abweicht, gilt: Fact ist Wahrheit, Ableitung ist falsch -> Reconcile (siehe K5/K9).
+- Keine Magic Keys:
+  * Es gibt keine “Policy im Code/Config” als impliziter Key.
+  * Wenn etwas scopen soll, muss es als Key/Fact/Setting-Override explizit modelliert sein (K7).
+
+K2.5 Terminologie-Set (nur begriffsprägend, keine Wiederholung)
+- Definitionen, die in vielen Kapiteln verwendet werden, werden als Stichwortliste geführt:
+  * <PRIMARY_POLICY_KEY Name>
+  * <conn_group>
+  * <vpn_connection>
+  * <customer>
+  * <device/subaccount> (optional)
+Hinweis: Vollbegriffe gehören ins Glossar; K2 ist nur das “Key-Contract” Zentrum.
+
+K2.6 Ref-only Regeln (damit Drift nicht wieder entsteht)
+- Ref-only Beispiel:
+  "Ref-only: Policy-Key = <PRIMARY_POLICY_KEY> (siehe K2.1/K2.3)."
+- Verboten außerhalb K2:
+  * neue Key-Definitionen ("Key ist ...")
+  * alternative Benennungen/Synonyme ohne Glossar-Definition
+  * “heimliche” Scopes durch Text-Formulierungen (z.B. “pro Gruppe …” ohne Key-Nennung)
+
+K2.7 Kanon-Refs / Delta (nur Verweise, kein Volltext)
+- Kanon-Ref: B030 §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: 02_GLOSSAR §<…> – Delta: <unverändert | ändern | ersetzen>
+- Delta-Hinweis: Wird erst beim tatsächlichen Transfer gepflegt (nicht beim Reorder).
+
+K2.DoD (nur Nachweis-Ideen, Details später in K10/B310)
+- Nachweis: Es existiert genau 1 definierter PRIMARY_POLICY_KEY inkl. Zweck und Invarianten (K2.1–K2.4).
+- Nachweis: Kein anderes Kapitel definiert Keys/IDs neu (nur Ref-only).
+- Nachweis: Begriffe sind konsistent (Glossar-Referenzen vorhanden, keine Synonym-Drift).
+
+Ziel-B-Dateien (Mapping):
+- B030_PRINCIPLES_POLICYMODEL
+- 02_GLOSSAR (nur Begriffe, die neu/entscheidend sind)
+
+--------------------------------------------------------------------
+
+K3 — SA-ALLOC — Addressing Lifecycle: ip_slot, Materialisierung, Uniqueness, Quarantäne, Exhaustion
+[PH: PH1, PH6]
+Single Anchor: JA (SA-ALLOC)
+
+Normative Regel (Single Definition):
+- Alles zu Slot-/IP-Allocation, Slotspace, Uniqueness, Quarantäne/Reuse und Exhaustion wird NUR hier (K3) normativ beschrieben.
+- Andere Kapitel dürfen Allocation nur referenzieren (Ref-only) und müssen auf K3 verweisen.
+- K3 definiert das Contract-Level (WAS gilt). Technische Enforcement-Punkte (nftables apply) sind in K6; State/Claim/DB-Outage Contract in K5; Key/Identity in K2; Pools/Zonen in K1.
+
+K3.1 SoT-Objekte (Allocator-Domäne)
+(Platzhalter – Inhalte später aus ENTWURF übernehmen und hier konsolidieren)
+- ip_slot: SoT-Eintrag für eine allokierbare Einheit (Slot) mit Lifecycle (active, quarantined, released, …)
+- slotspace: Definition des verfügbaren Adressraums pro Scope (z.B. pro conn_group) — Adressräume selbst stehen in K1.2
+- Ableitung v4/v6:
+  * v4/v6 Zuweisung ist aus Slot/Slotspace ableitbar (kein “zweiter” SoT an anderer Stelle)
+  * wenn eine Abbildung persistiert wird, muss klar sein: Fact vs Cache (K3 ist Contract, K5 Reconcile)
+
+K3.2 Allocation-Scope (wo gilt Uniqueness / was ist “gleich”?)
+- Uniqueness-Scope wird hier definiert (Contract), physisch enforced später im DB-Schema (B055).
+- Beispiele (Platzhalter):
+  * unik pro <conn_group, slot_id> innerhalb “active set”
+  * historisch darf mehrfach existieren, aber active darf nie kollidieren
+- Wichtig: “active vs historisch” ist hier als Regel fixiert, damit Quarantäne/Reuse konsistent bleibt.
+
+K3.3 Write-Path Contract (Materialisierung / Apply-Schnittstelle)
+- Allocation erzeugt/ändert SoT-Facts (DB).
+- Apply/Materialisierung (nft sets etc.) ist nachgelagert und wird über Hookpoints/Janitor/Apply-Worker durchgeführt (Details in K6/K9).
+- Idempotenz-Regel:
+  * Wiederholte Allocation-Requests dürfen keine Doppelbelegung erzeugen.
+  * apply/materialize darf wiederholt laufen (idempotent), solange Facts gleich bleiben.
+
+K3.4 Concurrency / Race Conditions (DB als “Schiedsrichter”)
+- Contract: Uniqueness muss physisch per DB garantiert werden (Unique Index / Constraints), nicht nur logisch im Text.
+- Bei Race:
+  * ein Gewinner, der andere erhält definierte Failure-Reason (Reason Code, Logging/Observability via B330; Mapping später)
+- Keine stillen Fallbacks:
+  * Exhaustion oder Uniqueness-Konflikt führt zu definiertem Hard-Fail (kein “nimm irgendwas anderes”).
+
+K3.5 Quarantäne & Reuse (Lifecycle)
+- Contract:
+  * Release -> Quarantäne-Fenster (wenn vorgesehen) -> danach reuse-eligible
+  * Reuse darf nur aus definiertem Zustand erfolgen (nicht aus “active”)
+- Re-Activation:
+  * Reuse erfolgt durch neue Allocation (neuer/vorheriger Slot) nach Regel; kein “magisches Re-Enable”
+- Abgrenzung:
+  * Claim/Disabled/Revoked Semantik ist K5; K3 beschreibt nur den Slot-Lifecycle und seine Reuse-Regeln.
+
+K3.6 Exhaustion-Verhalten (IP-Pool erschöpft)
+- Hard-Fail Contract:
+  * wenn slotspace erschöpft: keine Allocation möglich
+  * keine versteckten Defaults, keine Cross-Group-Fallbacks (außer explizit als Architekturentscheidung — dann zuerst in K2/K1 definieren)
+- Ops-Sicht:
+  * Exhaustion muss beobachtbar sein (Reason Code + Metrik/Log), aber Disk-Overflow vermeiden (B330/B310 Details später)
+
+K3.7 Recovery / Reconcile (Allocator-Sicht)
+- Contract:
+  * Wenn Apply/Enforcement temporär nicht nachkommt (z.B. nft apply lag), bleiben Facts SoT; Reconcile holt auf (K6/K9).
+  * Wenn DB temporär nicht verfügbar: Allocation ist nicht möglich (fail-closed); bestehende Sessions/Kernel-State behandeln K5/K6 (nicht K3).
+
+K3.8 Ref-only Regeln (damit Drift nicht wieder entsteht)
+- Verboten außerhalb K3:
+  * Slot-/Allocator-Algorithmen erklären
+  * eigene Uniqueness-Definitionen (“unique pro …”) ohne Verweis auf K3.2/K3.4
+  * Quarantäne/Reuse-Details duplizieren
+  * UI/Stats-Ampel/Thresholds/Panel-Darstellung definieren (gehört nach K9; K3 nur Allocation-Semantik)
+- Ref-only Beispiel:
+  "Ref-only: Slot/Reuse/Exhaustion gelten gemäß K3 (SA-ALLOC) – siehe K3.5/K3.6."
+
+K3.9 Kanon-Refs / Delta (nur Verweise, kein Volltext)
+- Kanon-Ref: B055_DB_SCHEMA_CORE §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B056_RADIUS_SCHEMA_MAPPING §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B166_POLICY_APPLY_RECONCILE §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B310_TESTS_ACCEPTANCE_CATALOG §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B330_LOGGING_MONITORING_RETENTION_ALERTS §<…> – Delta: <unverändert | ändern | ersetzen>
+- Delta-Hinweis: Wird erst beim tatsächlichen Transfer gepflegt (nicht beim Reorder).
+
+K3.DoD (nur Nachweis-Ideen, Details später in K10/B310)
+- Nachweis: Uniqueness ist als Contract klar (K3.2/K3.4) und wird später durch DB-Constraints nachgewiesen.
+- Nachweis: Quarantäne/Reuse-Regeln sind eindeutig (K3.5) und kollidieren nicht mit State-Semantik (K5).
+- Nachweis: Exhaustion ist Hard-Fail ohne Fallback (K3.6) und hat definierte Failure-Reasons (B330).
+- Nachweis: Idempotenz (K3.3) — wiederholte Requests erzeugen keine Doppelbelegung.
+
+Ziel-B-Dateien (Mapping):
+- B055_DB_SCHEMA_CORE
+- B056_RADIUS_SCHEMA_MAPPING (sofern IDs/Mapping betroffen)
+- B166_POLICY_APPLY_RECONCILE (Schnittstelle: materialize/apply)
+- B310_TESTS_ACCEPTANCE_CATALOG (Allocator/Exhaustion/Quarantäne Tests)
+- B330_LOGGING_MONITORING_RETENTION_ALERTS (Observability/Reason Codes – ggf. Verweise)
+
+--------------------------------------------------------------------
+
+K4 — SA-PROV — Provisioning: Create/Promote/Demote/Mismatch-Hardfails
+[PH: PH1, PH5]
+Single Anchor: JA (SA-PROV)
+
+Normative Regel (Single Definition):
+- Alles zu Provisioning (Erstellung/Validierung/“gültig werden”), Mismatch-Definitionen, Promote/Demote, Idempotenz/Recovery wird NUR hier (K4) normativ beschrieben.
+- Andere Kapitel dürfen Provisioning nur referenzieren (Ref-only) und müssen auf K4 verweisen.
+- K4 definiert den Contract-Level (WAS gilt). Keys/Identity: K2. Pools/IPs: K1. Allocation: K3. State/Claim: K5. Enforcement/Materialisierung: K6.
+
+K4.1 Objektentstehung (Create) — wann gibt es eine vpn_connection?
+(Platzhalter – später aus ENTWURF übernehmen und hier konsolidieren)
+- Create-Trigger:
+  * <z.B. Admin erstellt Account> / <Auto-Provision bei Kauf> / <First connect> (nur als Variantenliste)
+- Minimal-Facts bei Create (Contract):
+  * PRIMARY_POLICY_KEY muss gesetzt sein (siehe K2.1)
+  * Zuordnung zu customer_id / vpn_connection_id ist eindeutig (K2.2)
+  * Provisioning darf keine “Defaults im Text” erfinden; Defaults sind Settings (K7) oder DB-Defaults (B055)
+
+K4.2 “Gültig werden” (Provisioned / Ready) — Gate-Regeln
+- Contract: Eine Verbindung gilt erst als “ready”, wenn definierte Mindestbedingungen erfüllt sind.
+- Gate-Quellen (Ref-only auf SA-Stellen):
+  * Key/Identity Invarianten: K2
+  * Pools/Netzräume existieren: K1
+  * Slot/Address Allocation möglich: K3 (sonst Hard-Fail/Exhaustion)
+  * Verify/Claim/Restricted (falls Gate): K5 (nicht hier definieren)
+- Hinweis: K4 beschreibt nur, WANN provisioned/ready ist; WIE enforced wird, steht in K6.
+
+K4.3 Mismatch-Hardfails (Contract)
+- Grundsatz:
+  * Mismatch zwischen zusammengehörigen Facts/Bindungen führt zu Hard-Fail (fail-closed), nicht zu “best effort”.
+- Mismatch-Klassen (Platzhalter):
+  * PRIMARY_POLICY_KEY (K2) passt nicht zu Pool-Scope (K1.2)
+  * Identity-Bindung (user/device/subaccount) passt nicht zu conn_group (K2.2/K2.3)
+  * Slot/Allocation ist nicht kompatibel zum gewünschten Pool (K3 vs K1.2)
+  * Credential-/AAA-Zuordnung (RADIUS/SQL) passt nicht zum Connection-Fact (B050/B055 — später referenzieren)
+- Output/Observability:
+  * Jeder Hard-Fail braucht einen Failure-Reason/Code (Mapping später in B330/K7), aber K4 definiert die Existenzpflicht (nicht die Code-Liste).
+
+K4.4 Promote / Demote (optional, falls vorgesehen)
+- Contract:
+  * Promote/Demote ist eine kontrollierte Änderung des “Provisioning-Tiers” (z.B. group-level policy tier), aber ohne Identity-Key Mutation (K2 immutable).
+  * Wenn eine Änderung PRIMARY_POLICY_KEY erfordern würde: verboten -> neue vpn_connection (K2.3).
+- Safety:
+  * Jede Promote/Demote-Aktion muss explizit authorisiert sein (AuthZ in B285/K5 write-matrix), nicht implizit durch Connect.
+
+K4.5 Idempotenz (Provisioning ist wiederholbar)
+- Contract:
+  * Wiederholtes “Create” oder “Ensure Provisioned” erzeugt keine Duplikate.
+  * Jeder Step ist safe bei Retry (z.B. nach Timeout/DB reconnect).
+- Concurrency:
+  * Wenn zwei parallele Provisioning-Aktionen laufen, entscheidet DB-Unicity (K3.4/K2.3), und der Verlierer erhält einen definierten Failure-Reason.
+
+K4.6 Recovery / Rollback / Reconcile (Provisioning-Sicht)
+- Contract:
+  * Partial Provisioning darf keinen “kaputten Zwischenzustand” erzeugen, aus dem der Admin nicht rauskommt.
+  * Es gibt definierte Reset/Repair-Wege innerhalb der Sicherheitsgrenzen (Details später in K5/K9; K4 fordert nur, dass es existiert).
+- Abgrenzung:
+  * Apply/Materialisierung (nft) Recovery liegt in K6/K9; K4 bleibt beim Provisioning-Fact-Contract.
+
+K4.7 Ref-only Regeln (damit Drift nicht wieder entsteht)
+- Verboten außerhalb K4:
+  * Mismatch-Definitionen (welche Bindung ist “konsistent”)
+  * Promote/Demote Regeln
+  * Provisioning-Readiness Kriterien erklären
+- Ref-only Beispiel:
+  "Ref-only: Provisioning/Readiness/Mismatch gelten gemäß K4 (SA-PROV) – siehe K4.2/K4.3."
+
+K4.8 Kanon-Refs / Delta (nur Verweise, kein Volltext)
+- Kanon-Ref: B050_SQL_AAA_RADIUS §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B055_DB_SCHEMA_CORE §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B166_POLICY_APPLY_RECONCILE §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B167_WIRING_HOOKS_SYSTEMD §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B155_Onboarding_Verify-Wall_Claim_Token §<…> – Delta: <unverändert | ändern | ersetzen>
+- Delta-Hinweis: Wird erst beim tatsächlichen Transfer gepflegt (nicht beim Reorder).
+
+K4.DoD (nur Nachweis-Ideen, Details später in K10/B310)
+- Nachweis: Readiness-Kriterien sind eindeutig (K4.2) und referenzieren K1/K2/K3/K5 statt zu duplizieren.
+- Nachweis: Mismatch-Hardfails sind als Pflicht definiert (K4.3) inkl. Observability-Pflicht (Reason Codes existieren).
+- Nachweis: Provisioning ist idempotent (K4.5) und race-safe via DB constraints (K3/K2).
+- Nachweis: Recovery/Reset-Pfade existieren konzeptuell (K4.6) und sind später in K5/K9 operationalisiert.
+
+Ziel-B-Dateien (Mapping):
+- B050_SQL_AAA_RADIUS
+- B055_DB_SCHEMA_CORE
+- B166_POLICY_APPLY_RECONCILE
+- B167_WIRING_HOOKS_SYSTEMD (nur Hookpoints/Trigger als Verweis)
+- B155_Onboarding_Verify-Wall_Claim_Token (nur wenn direkt angebunden)
+
+--------------------------------------------------------------------
+
+K5 — SA-STATE — State-Machine + Claim/Verify + DB-Outage Contract
+[PH: PH5]
+Single Anchor: JA (SA-STATE)
+
+Normative Regel (Single Definition):
+- Die vollständige State-Semantik (stored Facts vs computed effective_state), Verify/Claim/Restricted/Disabled/Revoked,
+  TTL/Grace/Reset und DB-Outage-Verhalten wird NUR hier (K5) normativ beschrieben.
+- Andere Kapitel referenzieren States nur Ref-only (1–2 Sätze + Verweis auf K5).
+- Enforcement ("wie restricted technisch erzwungen wird") ist K6; Settings/Parameter/Keys (TTL/Grace etc) sind K7.
+
+K5.1 Stored Facts vs computed Views (effective_state)
+- Contract:
+  * Facts sind SoT (persistiert in DB). Beispiele: status_flags, email_verified_at, claim_state, revoked_at, disabled_at, created_at.
+  * effective_state ist computed/abgeleitet (View). Es ist niemals "SoT".
+- Fail-Closed Regel:
+  * Unknown/Missing Facts dürfen niemals zu "ALLOW" eskalieren.
+  * Wenn erforderliche Facts fehlen oder nicht verifizierbar sind: state fällt mindestens auf RESTRICT (oder definierte fail-closed Klasse).
+- Abgrenzung:
+  * "Missing vs Invalid" als generische Regel liegt in K7 (Settings/Validation); K5 benutzt nur die Begriffe.
+
+K5.2 State Model (Semantik – keine Tooling-Details)
+(Platzhalter – konkrete State-Namen später aus ENTWURF übernehmen, hier nur als Struktur)
+- Basisklassen (Beispielstruktur):
+  * ALLOW / ACTIVE: normaler Betrieb (Full Tunnel + policy apply)
+  * PENDING_VERIFY: Pre-Activation bis Verify abgeschlossen
+  * CLAIM_REQUIRED: Claim ist erforderlich (aber ggf. Grace aktiv)
+  * UNCLAIMED_OVERDUE: Claim überfällig (Walled Garden / nur Panel/DNS/NTP je Policy)
+  * RESTRICT: eingeschränkter Modus (fail-closed overlay; Ursachen: claim/expiry/manual/reason)
+  * DISABLED: administrativ deaktiviert (hart)
+  * REVOKED: entzogen (hart)
+- Contract:
+  * State-Klassen sind disjunkt in ihrer Bedeutung.
+  * Wenn mehrere Ursachen gelten, muss eine eindeutige Prioritätsregel existieren (siehe K5.4/K5.6).
+
+K5.3 Zeitlogik (TTL / Grace / Deadlines / Reset)
+- Contract:
+  * Zeitgetriebene Transitions werden eindeutig definiert: "wann kippt ein Zustand in den nächsten?"
+  * Deadline/Grace darf entweder computed oder stored sein – aber NUR eine Variante ist kanonisch (sonst Drift).
+- Platzhalter-Entscheidungspunkte (werden später mit ENTWURF gefüllt):
+  * claim_deadline_at: stored? oder computed = created_at + claim_grace?
+  * reset_mechanik: welche Facts resetten die Frist? (z.B. manual override, verify completed, claim completed)
+  * time_source: Server-time; monotonic handling vs clock-skew (als Regel, keine Implementierung)
+- Ref:
+  * konkrete Parameter-Namen/Defaults gehören nach K7 (Settings Keys).
+
+K5.4 Transition Rules (Deterministische Ableitung)
+- Contract:
+  * effective_state Ableitung ist deterministisch, vollständig und konfliktfrei.
+  * Priorität muss festgelegt sein (Beispiel – Platzhalter):
+    1) REVOKED (hart, immer)
+    2) DISABLED (hart, immer)
+    3) RESTRICT durch Policy (expiry/quota/manual) (je nach Design)
+    4) UNCLAIMED_OVERDUE / CLAIM_REQUIRED (zeit-/gate-basiert)
+    5) PENDING_VERIFY
+    6) ACTIVE/ALLOW
+- Non-Escalation bei Unsicherheit:
+  * Bei Unklarheit (DB_UNKNOWN etc.) darf es keine Eskalation in "erlaubter" werden.
+
+K5.5 DB-Outage Contract (DB_DOWN / DB_UNKNOWN / stale-safe)
+- Begriffe:
+  * DB_DOWN: DB nicht erreichbar (harte Outage)
+  * DB_UNKNOWN: Zustand nicht verifizierbar / Partial outage / Timeout (weicher, aber unsicher)
+- Contract: New logins / New provisioning
+  * neue Logins/Provisioning = fail-closed (keine neuen "ALLOW" Entscheidungen ohne Facts)
+- Contract: Established sessions
+  * Non-Escalation: bestehende Session darf nicht mehr Rechte bekommen als zuletzt materialisiert.
+  * stale-safe: bereits materialisierte Kernel/Enforcement-State kann kurzfristig weiterwirken, ABER nur fail-closed (niemals "unknown -> allow").
+  * Staleness-Grenze existiert (Max-Stale) als Settings-Key (K7); danach mindestens RESTRICT.
+- Recovery nach DB-Rückkehr:
+  * Reconcile/Apply muss deterministisch nachholen (K6/K9). K5 definiert: "DB return -> reconcile required".
+
+K5.6 Verify/Claim Mechaniken (Token/Facts als Contract)
+- Verify:
+  * Verify ist ein Gate, das einen Fact setzt (z.B. email_verified_at) — keine impliziten Freischaltungen ohne Fact.
+  * Codes/Tokens: single-use, TTL, RateLimit/Lockout als Policy (Keys in K7).
+- Claim:
+  * Claim ist ein Gate, das einen Fact setzt (z.B. claimed_at / claim_state=CLAIMED).
+  * Grace/Overdue leiten sich aus K5.3/K5.4 ab.
+- Security-Contract:
+  * keine Enumeration durch Fehlermeldungen (high-level; Details/Model in B285/K7)
+  * Replay/Guessing wird durch TTL+single-use+rate-limits begrenzt (Policy-Keys in K7).
+
+K5.7 Write-Path Matrix (wer darf welche Facts schreiben)
+- Contract:
+  * Write-Auth ist getrennt von Read/Compute.
+  * Jede Fact hat definierte Writer:
+    - Admin-only (z.B. disabled_at, revoked_at, manual_restrict_reason)
+    - System-only (z.B. last_seen_at, effective_state cache wenn überhaupt)
+    - User-action (z.B. claim completion) — nur wenn explizit erlaubt
+- Hinweis:
+  * genaue Matrix/Capabilities wird später aus ENTWURF übernommen und in B285/B155 verankert; K5 bleibt der normative Ort der Existenzpflicht.
+
+K5.8 Recovery / Reset / Repair (State-Sicht)
+- Contract:
+  * Für jeden "kaputten Zustand" existiert ein definierter Exit (manuell oder automatisch), innerhalb der Sicherheitsgrenzen.
+  * Reset darf niemals eine Sicherheitseskalation erzeugen (Reset ist nicht "bypass").
+- Beispiele (Platzhalter):
+  * "clear verify pending" nur via Admin oder sicherem Verify-flow
+  * "force restrict" (manual) ist möglich; "force allow" nur in eng definiertem Breakglass, wenn überhaupt (Policyentscheidung)
+
+K5.9 Ref-only Regeln (damit Drift nicht wieder entsteht)
+- Verboten außerhalb K5:
+  * State-Bedeutungen neu erklären
+  * DB-Outage Verhalten beschreiben
+  * TTL/Grace semantics interpretieren (außer Ref-only Verweis)
+- Ref-only Beispiele:
+  "Ref-only: Claim/Verify/Overdue Semantik siehe K5.6/K5.3."
+  "Ref-only: DB-Outage Verhalten siehe K5.5 (non-escalation, stale-safe, max-stale)."
+
+K5.10 Kanon-Refs / Delta (nur Verweise, kein Volltext)
+- Kanon-Ref: B155_Onboarding_Verify-Wall_Claim_Token §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B050_SQL_AAA_RADIUS §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B055_DB_SCHEMA_CORE §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B285_PANEL_SECURITY_MODEL §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B270_DIAG_ENDPOINT §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B310_TESTS_ACCEPTANCE_CATALOG §<…> – Delta: <unverändert | ändern | ersetzen>
+- Delta-Hinweis: Wird erst beim tatsächlichen Transfer gepflegt (nicht beim Reorder).
+
+K5.DoD (nur Nachweis-Ideen, Details später in K10/B310)
+- Nachweis: effective_state ist eindeutig ableitbar (K5.4) und fail-closed (K5.1).
+- Nachweis: DB-Outage Contract ist vollständig (new logins fail-closed, established non-escalation, max-stale, reconcile) (K5.5).
+- Nachweis: Verify/Claim sind fact-basiert (single-use/TTL/rate-limit policy keys existieren in K7) (K5.6).
+- Nachweis: Write-path Matrix existiert (wer darf welche Facts schreiben) (K5.7).
+- Nachweis: Für kaputte Zustände existiert ein Exit (Reset/Repair) ohne Eskalation (K5.8).
+
+Ziel-B-Dateien (Mapping):
+- B155_Onboarding_Verify-Wall_Claim_Token
+- B050_SQL_AAA_RADIUS
+- B055_DB_SCHEMA_CORE
+- B285_PANEL_SECURITY_MODEL
+- B270_DIAG_ENDPOINT
+- B310_TESTS_ACCEPTANCE_CATALOG
+
+--------------------------------------------------------------------
+
+K6 — SA-ENF — Enforcement: nftables Materialisierung + Reachability + DNS + Egress
+[PH: PH1, PH3, PH4]
+Single Anchor: JA (SA-ENF)
+
+Normative Regel (Single Definition):
+- Alle technischen Enforcement-Regeln (wo/wie fail-closed erzwungen wird) stehen NUR hier (K6).
+- K5 definiert Semantik/States (ALLOW/RESTRICT/...), aber K6 definiert, wie diese Semantik technisch materialisiert wird.
+- Harte IPs/CIDRs sind verboten in K6: K6 referenziert ausschließlich SERVICE_* Symbole und Zonen aus K1.
+- Settings/Parameter (z.B. max-stale, dns_force_mode, rate_limit Werte) werden nur als Key-Namen genannt und auf K7 verwiesen.
+
+K6.1 Enforcement-Punkte (Wo wird was erzwungen?)
+- Contract:
+  * Netzwerk-Policy Enforcement erfolgt primär über nftables (forward/input/output, nat/prerouting/postrouting).
+  * AAA (RADIUS/SQL) ist AuthN/AuthZ-Gate, aber nicht das Dataplane-Enforcement.
+  * DNS-Zwang kann per DNAT/Redirect enforced werden (Details als Contract hier, Keys/Mode in K7).
+- Abgrenzung:
+  * Welche Clients/Interfaces betroffen sind (pppX, xfrm, lo) wird später konkretisiert; K6 fordert nur, dass die Punkte eindeutig benannt werden.
+
+K6.2 Zonen & Reachability (nur Symbole, keine IPs)
+- Contract:
+  * Client-Netze dürfen definierte Services im SERVICE_NET erreichen (Symbole aus K1.3), abhängig vom effective_state (K5).
+  * Admin-Netz hat separaten Reachability-Scope (wenn vorgesehen), aber Regeln stehen hier; IPs stehen in K1.
+- Ref-only Pflicht:
+  "Ref-only: Service-Ziele = SERVICE_* (siehe K1.3)."
+
+K6.3 Restricted Overlay (Walled Garden / Minimal Reachability)
+- Contract:
+  * RESTRICT/UNCLAIMED_OVERDUE etc. (K5) materialisieren als "Overlay": Default-Deny + Allowlist.
+  * Allowlist enthält ausschließlich notwendige Minimalziele (typisch: SERVICE_WEB, SERVICE_DNS, SERVICE_NTP) je definierter Policy.
+  * Keine impliziten Allow-Backdoors: Overlay muss v4/v6-parallel und deterministisch sein.
+- Drift-Guard:
+  * Die Frage "welcher State bekommt welche Allowlist" wird semantisch in K5 entschieden; K6 beschreibt nur die technische Form (Overlay).
+
+K6.4 Full-Tunnel / Forward / NAT Contract
+- Contract:
+  * Full-Tunnel bedeutet: Client-Egress geht über den Server (Forward+Masquerade nach WAN), sofern effective_state das erlaubt.
+  * In restricted states kann Egress komplett blockiert oder auf definierte Ziele limitiert sein (Overlay).
+  * NAT/Forward Regeln müssen zonenbewusst sein (K1), Peer-Isolation bleibt enforced (K6.6).
+- Hinweis:
+  * Keine Magic Ausnahmen (z.B. "random outbound allowed") ohne ausdrückliche State-Policy (K5) + Settings (K7).
+
+K6.5 DNS Enforcement (Zwang / Redirect / Allowlist)
+- Contract:
+  * Wenn DNS-Zwang aktiv ist, werden Client-DNS Queries (UDP/TCP 53) auf SERVICE_DNS erzwungen.
+  * DNS-Zwang ist state-aware: in RESTRICT kann DNS erzwungen und zugleich Egress limitiert sein.
+  * v4/v6 Parity: DNS Enforcement gilt identisch für IPv4 und IPv6 (falls IPv6 aktiv); sonst explizit IPv6 disabled (K7/K8).
+- Abgrenzung:
+  * Resolver-Stack (Unbound/AdGuard) ist K? (Dependency), aber K6 beschreibt Enforcement nur als dataplane rule.
+
+K6.6 Isolation & Abuse Controls (Peer-Isolation, Egress-Blocks)
+- Contract:
+  * User↔User Verkehr im Client-Netz ist standardmäßig blockiert (Peer-Isolation).
+  * Outbound-Abuse Blocks (SMTP/SMB/NetBIOS etc.) sind enforced im Dataplane (nft), nicht nur “Policy Text”.
+  * Rate-Limits/Scan-Protections sind optional, aber wenn vorgesehen, gehören sie hier als Enforcement-Contract hin (Werte/Keys nach K7).
+
+K6.7 Apply / Materialisierung / Reconcile Hookpoints
+- Contract:
+  * Es existiert ein definierter Pfad: (Facts/State) -> (Apply/Materialize nft state).
+  * Apply ist idempotent und kann wiederholt laufen (Retry-safe).
+  * Reconcile wird ausgelöst bei: state change, DB return nach outage, periodic janitor (K9) oder manual admin action.
+- Abgrenzung:
+  * Der genaue Mechanismus (systemd unit, hook scripts, worker) wird später in B166/B167 festgelegt; K6 fordert die Existenz und die Trigger-Klassen.
+
+K6.8 Observability (Enforcement-Sicht, ohne Log-Spam)
+- Contract:
+  * Jede deny/overlay Entscheidung muss debugbar sein (Reason Codes/Stats), ohne Disk overflow.
+  * Logging/Retention/Rate-Limits für Logs liegen in B330; K6 fordert nur: “es gibt Signale”.
+
+K6.9 Ref-only Regeln (damit Drift nicht wieder entsteht)
+- Verboten außerhalb K6:
+  * nftables / DNAT / NAT / Isolation Regeln im Detail erklären
+  * "restricted overlay" technisch definieren
+  * DNS-Zwang-Enforcement beschreiben
+  * Claim/Verify/Hard-Stop States werden nur als Trigger genannt; Semantik/TTL/Reset/DB-Outage siehe K5 (SA-STATE).
+- Ref-only Beispiele:
+  "Ref-only: Enforcement erfolgt gemäß K6 (SA-ENF) – Overlay/Isolation/DNS-Zwang siehe K6.3/K6.6/K6.5."
+  "Ref-only: Keine IPs hier; SERVICE_* mapping siehe K1.3."
+
+K6.10 Kanon-Refs / Delta (nur Verweise, kein Volltext)
+- Kanon-Ref: B100_WAN_Exposure_Model_(Binding-First, optional Stealth) §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B110_NFT_L2TP_ONLY_VIA_IPSEC §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B120_NFT_FORWARD_NAT_FULLTUNNEL §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B130_NFT_PEER_ISOLATION §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B140_NFT_OUTBOUND_ABUSE_BLOCKS §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B150_Walled_Garden_Restricted_Mode_(QuotaExpiryManual) §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B166_POLICY_APPLY_RECONCILE §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B210_DNS_ENFORCEMENT_DNAT53 §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B330_LOGGING_MONITORING_RETENTION_ALERTS §<…> – Delta: <unverändert | ändern | ersetzen>
+- Delta-Hinweis: Wird erst beim tatsächlichen Transfer gepflegt (nicht beim Reorder).
+
+K6.DoD (nur Nachweis-Ideen, Details später in K10/B310)
+- Nachweis: K6 enthält keine harten IPs/CIDRs; alle Service-Ziele sind SERVICE_* (K1.3).
+- Nachweis: Restricted Overlay ist Default-Deny + Allowlist und state-aware (K6.3).
+- Nachweis: DNS Enforcement kann nicht umgangen werden, wenn aktiv (K6.5) (genaue Tests später).
+- Nachweis: Peer-Isolation + Abuse-Blocks sind als Dataplane-Enforcement definiert (K6.6).
+- Nachweis: Apply/Reconcile ist idempotent und hat definierte Trigger (K6.7).
+
+Ziel-B-Dateien (Mapping):
+- B100_WAN_Exposure_Model_(Binding-First, optional Stealth)
+- B110_NFT_L2TP_ONLY_VIA_IPSEC
+- B120_NFT_FORWARD_NAT_FULLTUNNEL
+- B130_NFT_PEER_ISOLATION
+- B140_NFT_OUTBOUND_ABUSE_BLOCKS
+- B150_Walled_Garden_Restricted_Mode_(QuotaExpiryManual)
+- B166_POLICY_APPLY_RECONCILE
+- B200_DNS_UNBOUND_ADGUARD (Dependency)
+- B210_DNS_ENFORCEMENT_DNAT53
+- B330_LOGGING_MONITORING_RETENTION_ALERTS
+
+--------------------------------------------------------------------
+
+K7 — SA-SETTINGS — Settings/Parameter: SQL-first, Resolution Order, Missing vs Invalid, Observability
+[PH: PH1–PH6 quer]
+Single Anchor: JA (SA-SETTINGS)
+
+Normative Regel (Single Definition):
+- Jede Policy-Variable (TTL/Grace/Max-Stale/RateLimit/DNS-Mode/Fail-Closed Verhalten etc.) wird als Settings-Key modelliert.
+- Werte/Defaults/Overrides kommen ausschließlich aus dem Settings-System (SQL-first). Keine Magic Numbers in Textdateien.
+- Andere Kapitel dürfen Parameter nur als Key-Namen nennen (Ref-only) und müssen auf K7 verweisen.
+- K7 definiert: (a) Key-Namen-Konventionen, (b) Resolution Order, (c) Missing vs Invalid Semantik, (d) Override-Sicherheit/Traceability.
+
+K7.1 Settings-Domäne (was ist “Setting” vs was ist “Fact”?)
+- Contract:
+  * Facts (SoT) sind DB-Fakten zur Verbindung/Identität/State (K2/K3/K5).
+  * Settings sind Policy-Parameter, die Ableitungen/Enforcement steuern (K5/K6) – aber selbst nicht “State”.
+- Drift-Guard:
+  * Wenn etwas die Policy beeinflusst und nicht ein Fact ist, ist es ein Setting-Key (nicht Textregel).
+
+K7.2 Datenmodell (SQL-first)
+- Contract (konzeptuell, ohne Schema-Volltext):
+  * settings_catalog: Key-Definitionen (name, datatype, description, allowed_override_scope, fail_class, validation_rules, default_value_ref)
+  * settings_value: Override-Werte mit Scope (z.B. global/conn_group/customer/vpn_connection) + provenance (wer/was/warum) + timestamps
+- Minimalfelder (Pflicht auf Kanon-Ebene, nicht als fertiges SQL hier):
+  * key_name (immutable), datatype, allowed_override_scope, fail_class, is_sensitive (optional), created_at/updated_at
+  * scope_type + scope_id + value + enabled + effective_from/effective_until (optional)
+- Hinweis:
+  * Physisches Schema/Indizes gehören später in B055; K7 ist die Norm für “muss existieren”.
+
+K7.3 Key Naming & Datatypes (damit Ref-only eindeutig ist)
+- Key-Namen sind lower_snake_case und stabil (immutable).
+- Datatypes (Contract):
+  * bool, int, duration_seconds, enum, string, cidr/prefix (nur wenn wirklich nötig), json (nur wenn streng validiert)
+- Verbot:
+  * gleiche Semantik unter verschiedenen Key-Namen (Synonym-Drift).
+
+K7.4 Resolution Order (Priorität der Overrides)
+- Contract:
+  * Settings werden deterministisch aufgelöst (kein “undefined behavior” durch Query-Reihenfolge).
+  * Resolution Order ist kanonisch fest (und gilt überall gleich).
+- Empfohlene (noch nicht “hart” technisch implementierte) Reihenfolge als Norm:
+  1) vpn_connection (instance scope)
+  2) customer (tenant/account scope)
+  3) conn_group / PRIMARY_POLICY_KEY scope (K2)
+  4) global default
+- Tie-break:
+  * Wenn mehrere Werte in gleicher Ebene existieren: eindeutig definierte Auswahlregel (z.B. latest enabled mit highest priority marker) – muss festgelegt sein, sonst Drift.
+- Trace:
+  * Das System muss für jeden resolved key zurückgeben können: “source scope + record id + timestamp” (siehe K7.8).
+
+K7.5 allowed_override_scope (Guardrail gegen Sicherheits-Drift)
+- Contract:
+  * Jeder Key definiert, auf welchen Scopes Overrides erlaubt sind (allowed_override_scope).
+  * Keys mit sicherheitskritischer Wirkung können auf “global only” oder “conn_group only” beschränkt sein.
+- Beispiele (nur Kategorien, keine Wertelisten):
+  * Security-Gates (z.B. breakglass/force_allow) => strengste Scope-Restriktion oder verboten
+  * QoS Limits => conn_group/customer erlaubbar
+  * DNS Enforcement Mode => conn_group/global, je nach Design
+- Enforcement:
+  * Override außerhalb allowed_override_scope muss hard-fail (Admin sieht klaren Reason Code).
+
+K7.6 Missing vs Invalid (security-relevant)
+- Contract:
+  * Missing (nicht gesetzt / kein record) ist NICHT gleich Invalid (korrupt / falscher Typ / out of range).
+  * Missing -> Fallback nach Resolution Order (K7.4) bis Default; wenn kein Default existiert -> fail-closed gemäß fail_class.
+  * Invalid -> niemals Fallback “still” ohne Alarm; invalid führt zu definierter fail-closed Aktion + Observability.
+- Pflicht:
+  * Für jeden Key gibt es validierbare Regeln (datatype + range/enum + ggf. format).
+  * Validation passiert vor “effective use” (also bevor K5/K6 daraus Policy ableiten).
+
+K7.7 fail_class (wie wirkt ein Settings-Problem?)
+- Contract:
+  * fail_class klassifiziert die Auswirkung, wenn ein Key missing/invalid/unresolvable ist.
+- Klassen (konzeptuell; konkrete Enum-Liste später festziehen):
+  * FAIL_CLOSED_RESTRICT (min. RESTRICT / overlay)
+  * FAIL_CLOSED_DENY_NEW (z.B. nur New Logins blockieren)
+  * FAIL_SAFE_DEFAULT (nur für nicht-sicherheitsrelevante Keys; darf nie zu ALLOW eskalieren)
+- Drift-Guard:
+  * Keys, die State/Enforcement beeinflussen, dürfen keinen “fail open” Pfad haben.
+
+K7.8 Traceability / Audit / Explainability (ohne Disk-Overflow)
+- Contract:
+  * Für jede resolved Decision (insb. K5 effective_state und K6 overlay/enforcement) muss erklärbar sein:
+    - welche Keys genutzt wurden
+    - woher sie kamen (scope, record id)
+    - ob fallback oder invalid/missing vorlag
+  * Logging/Retention ist in B330; K7 fordert nur die Existenz von “Explain-Data”.
+- Minimal:
+  * eine “settings_resolution_trace” Sicht/Output (nicht zwingend persistiert) für /diag (K9/B270).
+
+K7.9 Security Keys (Token/Verify/Claim/RateLimits) — nur als “Keypflicht”, nicht als Volltext
+- Contract:
+  * Token/Verify/Claim Policy wird in K5 semantisch beschrieben; K7 definiert, dass Parameter dafür Keys sind.
+- Kategorien (nur Keypflicht, keine Werte):
+  * verify_code_ttl_seconds
+  * verify_code_rate_limit (struktur: attempts/window/lockout)
+  * claim_grace_seconds oder claim_deadline_mode (computed vs stored) als Entscheidung
+  * max_stale_seconds (DB-outage stale-safe) (K5.5)
+  * dns_force_mode (off/soft/hard) (K6.5)
+  * outbound_abuse_block_mode (wenn optional) (K6.6)
+- Hinweis:
+  * Konkrete Default-Werte werden später festgelegt (und getestet), aber nicht in Textdateien verteilt.
+
+K7.10 Ref-only Regeln (damit Drift nicht wieder entsteht)
+- Verboten außerhalb K7:
+  * Parameter erklären (TTL/Grace/Max-Stale/Ratelimits/DNS-Mode etc.)
+  * Resolution Order interpretieren
+  * Missing/Invalid semantisch neu definieren
+- Ref-only Beispiele:
+  "Ref-only: Parameter als Key nach K7 (SA-SETTINGS) – Resolution Order siehe K7.4."
+  "Ref-only: Missing vs Invalid + fail_class siehe K7.6/K7.7."
+
+K7.11 Kanon-Refs / Delta (nur Verweise, kein Volltext)
+- Kanon-Ref: B055_DB_SCHEMA_CORE §<settings_catalog/settings_value> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B285_PANEL_SECURITY_MODEL §<AuthZ/Settings-Overrides> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B270_DIAG_ENDPOINT §<settings trace> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B310_TESTS_ACCEPTANCE_CATALOG §<settings resolution tests> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B330_LOGGING_MONITORING_RETENTION_ALERTS §<invalid/missing alerting> – Delta: <unverändert | ändern | ersetzen>
+- Delta-Hinweis: Wird erst beim tatsächlichen Transfer gepflegt (nicht beim Reorder).
+
+K7.DoD (nur Nachweis-Ideen, Details später in K10/B310)
+- Nachweis: Kein Kapitel außer K7 erklärt Parameter; überall nur Key-Namen + Ref-only.
+- Nachweis: Resolution Order ist deterministisch und als Norm fest (K7.4).
+- Nachweis: Missing ≠ Invalid ist normativ (K7.6) und invalid führt zu definierter fail_class (K7.7).
+- Nachweis: allowed_override_scope verhindert “Policy im Text” und unsafe Overrides (K7.5).
+- Nachweis: Jede Entscheidung ist erklärbar (Trace) ohne Log-Overflow (K7.8).
+
+Ziel-B-Dateien (Mapping):
+- B055_DB_SCHEMA_CORE
+- B280_PANEL_FEATURES_USER_ADMIN
+- B285_PANEL_SECURITY_MODEL
+- B270_DIAG_ENDPOINT
+- B310_TESTS_ACCEPTANCE_CATALOG
+- B330_LOGGING_MONITORING_RETENTION_ALERTS
+
+--------------------------------------------------------------------
+
+K8 — SA-IKE — IKE / Credentials / Gate-0 PSK Ops-Contract
+[PH: PH1, PH5]
+Single Anchor: JA (SA-IKE)
+
+Normative Regel (Single Definition):
+- Alle Aussagen zu PSK/Gate-0, Credential-Lifecycle, Rotation/Distribution, Breakglass und “IKE-Policy”
+  werden NUR hier (K8) normativ definiert.
+- Andere Kapitel (z.B. K5 State, K6 nft Enforcement, K7 Settings) referenzieren K8 nur Ref-only
+  und nennen höchstens Key-Namen (wenn settings-basiert) ohne Semantik.
+
+K8.1 Begriffsrahmen (Policy, nicht Tooling)
+- Gate-0 PSK:
+  * Gemeinsamer “Baseline Zugang” (Pre-Auth) mit strengem Ops-Contract (Rotation/Distribution/Incident).
+  * K8 definiert nur die Policy/Constraints; konkrete Implementierungsdetails bleiben im Kanon (B070/B040).
+- Credentials:
+  * “Customer Credential” (z.B. PPP/RADIUS Identität) vs “Gate-0 PSK” sind getrennte Trust-Layer.
+  * K8 ist der Ort, an dem diese Trennung begrifflich und operativ festgezogen wird.
+
+K8.2 Gate-0 PSK Ops-Contract (Rotation / Distribution / Incident)
+- Contract:
+  1) Rotation:
+     - PSK Rotation ist geplant, dokumentiert, und hat eine definierte Übergangslogik (z.B. overlap/grace),
+       ohne dass das System in “undefined auth state” fällt.
+  2) Distribution:
+     - PSK wird nur über definierte Kanäle verteilt (Policy), niemals “ad hoc”.
+     - Logging/Observability darf PSK niemals leaken (siehe Constraints).
+  3) Breakglass:
+     - Es existiert ein definierter Notfallpfad (Breakglass), aber:
+       * Breakglass darf niemals “force allow” sein.
+       * Breakglass ist auditierbar und zeitlich/Scope-begrenzt (Policy).
+  4) Incident Response:
+     - Bei PSK-Compromise existiert ein klarer “Containment”-Pfad:
+       * Rotation triggern
+       * ggf. Restrict/Disable baseline access (Policyentscheidung in K5/K6 referenziert, aber PSK-Incident ist hier beschrieben)
+
+K8.3 IKE / Legacy-Kompatibilitäts-Constraints (Policy-Sicht)
+- Contract:
+  * K8 definiert die “must be possible for XP/Vista” Rahmenbedingungen als Policy-Constraints,
+    ohne konkrete Cipher-Suites als Volltext hier festzunageln (das bleibt Kanon/Implementierung).
+  * Wenn bestimmte Defaults modern/legacy kollidieren, muss das als Constraint/Tradeoff benannt werden:
+    - “Legacy-Client-Kompatibilität” darf nicht implizit moderne Defaults voraussetzen.
+
+K8.4 Credential Binding / Identity-Bezug (Bezug zu K2 & K5)
+- Contract:
+  * PSK ist nicht die User-Identity.
+  * User-Identity (Customer/Device/Subaccount) bleibt in K2/K5 normativ.
+  * K8 beschreibt nur, wie Gate-0 PSK zum eigentlichen AAA/Identity-Layer abgegrenzt ist:
+    - “Gate-0 erfüllt nur Zugang zur Auth-Schicht, nicht den Claim/Verify/Policy-State.”
+
+K8.5 Ref-only Regeln (damit Drift nicht wieder entsteht)
+- Verboten außerhalb K8:
+  * Rotation/Distribution/Breakglass Semantik erklären
+  * PSK-Incident Handling detaillieren
+  * “IKE Policy” als neue Normtexte außerhalb K8 definieren
+- Ref-only Beispiele:
+  "Ref-only: Gate-0 PSK Ops-Contract siehe K8.2."
+  "Ref-only: PSK ist nicht User-Identity; Identity siehe K2, State/Gates siehe K5."
+
+K8.6 Kanon-Refs / Delta (nur Verweise, kein Volltext)
+- Kanon-Ref: B040_STACK_PROTOCOLS §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B070_CRYPTO_LEGACY_DEBIAN13 §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B240_CLIENT_SETUP_TOOL_XP §<…> – Delta: <unverändert | ändern | ersetzen>
+- Delta-Hinweis: Wird erst beim tatsächlichen Transfer gepflegt (nicht beim Reorder).
+
+K8.DoD (nur Nachweis-Ideen, Details später in K10/B310)
+- Nachweis: PSK/Gate-0 und Customer-Creds sind sauber getrennt (K8.1/K8.4).
+- Nachweis: Rotation/Distribution/Breakglass sind als Policy-Contract definiert, ohne Secrets-Leakage (K8.2).
+- Nachweis: Legacy-Constraints sind als Policy-Constraints erfasst, ohne moderne Defaults zu unterstellen (K8.3).
+- Nachweis: Drift verhindert: außerhalb K8 existieren nur Ref-only Verweise (K8.5).
+
+Ziel-B-Dateien (Mapping):
+- B040_STACK_PROTOCOLS
+- B070_CRYPTO_LEGACY_DEBIAN13
+- B240_CLIENT_SETUP_TOOL_XP (wenn Setup/Parameter betroffen)
+- B280_PANEL_FEATURES_USER_ADMIN
+- B285_PANEL_SECURITY_MODEL
+- B310_TESTS_ACCEPTANCE_CATALOG
+- (optional) B050_SQL_AAA_RADIUS (nur falls AAA/Gate-0 dort als Policy erwähnt werden muss)
+
+--------------------------------------------------------------------
+
+K9 — SA-OPSUI — Ops-UI / ONLINE-SoT / Collector / Janitor / Diagnose-Pattern
+[PH: PH5, PH6]
+Single Anchor: JA (SA-OPSUI)
+
+Normative Regel (Single Definition):
+- Alles, was “Ops-UI Sicht”, ONLINE-Definitionen, Accounting/Collector, Janitor/Reconcile-Jobs und /diag-Inhalte betrifft,
+  wird NUR hier (K9) normativ beschrieben.
+- K9 definiert NUR Ableitungen/Views/Repair-Prozesse und deren Guardrails.
+  K9 darf keine Kern-Policy neu definieren (States/Gates bleiben in K5; Settings/Parameter bleiben in K7; Enforcement bleibt in K6).
+
+K9.1 ONLINE-SoT: Definitionen (was heißt “online” im System?)
+- Contract:
+  * ONLINE ist eine Sicht/Ableitung aus Observability-/Accounting-Daten (z.B. radacct/session events), NICHT der Kern-State.
+  * ONLINE ≠ effective_state.
+  * effective_state ist policy-relevant und steht ausschließlich in K5.
+- Drift-Guard:
+  * Ops-UI darf niemals aus “ONLINE” automatisch “ALLOW” oder “UNRESTRICT” ableiten.
+  * ONLINE ist “Signal”, nicht “Entscheidung”.
+
+K9.2 Datenquellen & SoT-Abgrenzung (Accounting/Collector)
+- Contract:
+  * Es gibt eine definierte Quelle/Schicht, die Session-/Accounting-Daten sammelt (Collector).
+  * Collector-Daten können verzögert, doppelt oder lückenhaft sein (eventual consistency).
+  * Facts/Identity (K2) bleiben SoT; Accounting ist Observability-SoT (nur für ONLINE/Stats/Debug).
+- Minimaler Normsatz:
+  * “ONLINE-SoT” wird als eigene Domäne geführt: ingest -> normalize -> derive ONLINE view.
+
+K9.3 Session-Mapping (Zuordnung von Accounting -> Identity)
+- Contract:
+  * Jede Online/Session Anzeige muss auf definierter Mapping-Logik beruhen (kein “best guess” im UI).
+  * Wenn Mapping unsicher/unklar ist, muss UI das als “UNKNOWN / UNMAPPED” markieren (kein stilles Faking).
+- Output-Pflicht:
+  * Derive-Felder für UI: online_status, last_seen_at, mapping_quality (ok/partial/unknown) (nur konzeptuell, kein Schema).
+
+K9.4 Janitor Pattern (Stale Sessions / Repair / Backfill)
+- Zweck:
+  * Janitor ist der definierte Mechanismus, um Drift zwischen “Observed Sessions” und “Facts/Derived Views” zu bereinigen.
+- Contract:
+  1) Stale-Erkennung:
+     - “stale” wird aus Observability-SoT abgeleitet (z.B. last_update_at, no traffic, timeout) – Parameter nur als Key-Namen (Ref K7).
+  2) Repair-Aktionen:
+     - Markiere/abschließe Observability-Session als stale/closed (Observability-Domäne), ohne Kern-Policy zu überschreiben.
+  3) Backfill:
+     - Bei verspäteten Accounting-Events: Janitor darf Views rekonstruieren, aber keine policy states mutieren.
+- Hard Rule:
+  * Janitor darf niemals “Policy-State” (K5) direkt umschreiben, außer über explizit definierte Repair-/Admin-Operationen,
+    die in K5 als erlaubt beschrieben sind (Write-Path Matrix).
+
+K9.5 DB-Outage / Partial-Outage Verhalten (Ops-UI Robustheit)
+- Contract:
+  * Ops-UI muss bei DB_DOWN/DB_UNKNOWN (K5) weiter “debugbar” bleiben, ohne Policy zu eskalieren.
+  * Wenn Views nicht zuverlässig berechenbar sind, muss UI degradieren:
+    - Anzeigen: “Status unknown / data stale”
+    - Keine stillen Defaults, die wie echte Facts wirken
+- Ref-only:
+  * DB_OUTAGE-Policy liegt in K5; K9 beschreibt nur UI/Observability-Degradation.
+
+K9.6 /diag Inhalte (Supportbarkeit ohne Dead Ends)
+- Contract:
+  * /diag liefert Status/Explain-Data, nicht Secrets.
+  * /diag muss mindestens:
+    - effective_state (Ref K5)
+    - ONLINE/last_seen/mapping_quality (K9.1–K9.3)
+    - “settings trace” (Ref K7; nur Source/Scope/Ids, keine sensiblen Werte)
+    - “enforcement trace” (Ref K6; z.B. welches overlay aktiv, ohne komplette nft dumps im UI)
+- Sicherheitsgrenze:
+  * /diag ist rollen-/scope-gebunden (AuthZ im Kanon; K9 fordert nur: “nicht öffentlich, nicht für andere Customer sichtbar”).
+
+K9.7 Ref-only Regeln (damit Drift nicht wieder entsteht)
+- Verboten außerhalb K9:
+  * Definition “ONLINE” oder “Collector/Janitor Semantik”
+  * UI-Ampel/Counts als Kernpolicy interpretieren
+  * Repair/Backfill Regeln doppelt erklären
+- Claim/Verify/Hard-Stop/Disabled/Revoked Semantik inkl. TTL/Reset/Startzeit + DB-Outage-Policy bleibt ausschließlich in K5; K9 zeigt nur Ableitungen/Statusanzeigen und referenziert K5.  
+- Ref-only Beispiele:
+  "Ref-only: ONLINE/Collector/Janitor siehe K9 (SA-OPSUI)."
+  "Ref-only: effective_state/DB_OUTAGE Policy siehe K5 (SA-STATE)."
+- Allocation/Slot-State-Semantik (ip_slot, Slotspace, Uniqueness, Quarantäne, Exhaustion) bleibt ausschließlich in K3; K9 zeigt nur Ableitungen/Counts/Ampeln und referenziert K3.  
+
+K9.8 Kanon-Refs / Delta (nur Verweise, kein Volltext)
+- Kanon-Ref: B165_ACCOUNTING_COLLECTOR_SESSION_MAPPING §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B168_STALE_SESSION_JANITOR §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B169_RADIUS_LOGIN_FLOW_ONDEMAND_JANITOR §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B270_DIAG_ENDPOINT §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B280_PANEL_FEATURES_USER_ADMIN §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B330_LOGGING_MONITORING_RETENTION_ALERTS §<…> – Delta: <unverändert | ändern | ersetzen>
+- Kanon-Ref: B310_TESTS_ACCEPTANCE_CATALOG §<…> – Delta: <unverändert | ändern | ersetzen>
+- Delta-Hinweis: Wird erst beim tatsächlichen Transfer gepflegt (nicht beim Reorder).
+
+K9.DoD (nur Nachweis-Ideen, Details später in K10/B310)
+- Nachweis: ONLINE ist strikt von effective_state getrennt (K9.1).
+- Nachweis: Janitor/Repair verändert keine Policy states außerhalb der K5 Write-Path Matrix (K9.4).
+- Nachweis: DB-Outage UI degradiert sichtbar (unknown/stale) ohne silent defaults (K9.5).
+- Nachweis: /diag ist debugbar ohne Secrets und scope-gebunden (K9.6).
+- Nachweis: Drift verhindert: außerhalb K9 existieren nur Ref-only Verweise (K9.7).
+
+Ziel-B-Dateien (Mapping):
+- B165_ACCOUNTING_COLLECTOR_SESSION_MAPPING
+- B168_STALE_SESSION_JANITOR
+- B169_RADIUS_LOGIN_FLOW_ONDEMAND_JANITOR
+- B280_PANEL_FEATURES_USER_ADMIN
+- B270_DIAG_ENDPOINT
+- B330_LOGGING_MONITORING_RETENTION_ALERTS
+- B310_TESTS_ACCEPTANCE_CATALOG
+
+--------------------------------------------------------------------
+
+K10 — DoD Index + Backlog + Decision Register (FEST)
+[PH: alle]
+Single Anchor: TEILWEISE (SA-DOD als Index, nicht als Normwiederholung)
+
+K10.1 — DoD INDEX (PH1–PH6) — nur Verweise (kein Normtext)
+- Zweck:
+  * Zentraler Index: “Wo steht was?” für DoD/Validierung je Phase.
+  * Keine Wiederholung von Regeln/Normen. Nur Verweise auf SA-Kapitel (K1–K9) + optional B310.
+
+PH1 VPN Stabilität
+- DoD-Verweise:
+  * K6 (SA-ENF) — Enforcement/Overlay/NAT/Isolation (Ref-only)
+  * K8 (SA-IKE) — Gate-0 PSK Ops-Contract / IKE-Constraints (Ref-only)
+  * K7 (SA-SETTINGS) — parameterisierte TTL/Max-Stale/Mode-Keys (Ref-only)
+  * (optional) B310_TESTS_ACCEPTANCE_CATALOG — konkrete Proofs/Tests
+
+PH2 QoS/tc
+- DoD-Verweise:
+  * (placeholder) K? / SA für QoS (falls später als eigenes K-Kapitel geführt)
+  * (optional) B310_TESTS_ACCEPTANCE_CATALOG
+
+PH3 DNS Stack + DNS-Zwang
+- DoD-Verweise:
+  * K6 (SA-ENF) — DNS-Enforcement Contract (Ref-only)
+  * K7 (SA-SETTINGS) — dns_force_mode + related keys (Ref-only)
+  * (optional) B310_TESTS_ACCEPTANCE_CATALOG
+
+PH4 DNS-Zwang “hart” + Blockpage/CA
+- DoD-Verweise:
+  * K6 (SA-ENF) — enforcement/redirect/allowlist (Ref-only)
+  * K7 (SA-SETTINGS) — mode keys + guardrails (Ref-only)
+  * (optional) B310_TESTS_ACCEPTANCE_CATALOG
+
+PH5 Webpanel + Verify/Claim + /diag
+- DoD-Verweise:
+  * K5 (SA-STATE) — verify/claim semantics (Ref-only)
+  * K7 (SA-SETTINGS) — verify/claim keys + resolution order (Ref-only)
+  * K9 (SA-OPSUI) — /diag minimum + ONLINE separation (Ref-only)
+  * (optional) B310_TESTS_ACCEPTANCE_CATALOG
+
+PH6 Extras (Quota/Expiry/Monitoring/Backup/Export etc.)
+- DoD-Verweise:
+  * K9 (SA-OPSUI) — ops-ui/collector/janitor patterns (Ref-only)
+  * K7 (SA-SETTINGS) — feature flags/parameters (Ref-only)
+  * (optional) B310_TESTS_ACCEPTANCE_CATALOG
+
+
+K10.2 — VALIDATION REGISTER (V-IDs) — Schema + Referenzregel
+- Zweck:
+  * V-IDs sind referenzierbare Nachweis-/Validierungseinträge (DoD), ohne Testabläufe in den SA-Kapiteln zu duplizieren.
+  * SA-Kapitel (K1–K9) dürfen DoD/Tests erwähnen, aber konkrete Nachweise werden über V-IDs referenziert.
+
+ID-Schema:
+- Format: V-K<kapitel>-<laufnummer>
+  Beispiel: V-K6-01
+- Laufnummern pro K-Kapitel separat, aufsteigend, nie wiederverwenden.
+
+Mindestfelder pro V-ID (Template):
+- V-ID:
+- Scope/Phase: (PH1..PH6 | quer)
+- Target-SA: (Kx oder Kx.y)
+- Kategorie: (Smoke | Happy | Negative | Failure | Recovery | Abuse)
+- Preconditions: (1–3 Stichpunkte)
+- Stimulus/Action: (was wird getan)
+- Expected: (was muss beobachtbar sein)
+- Evidence: (welcher Nachweis zählt; Log/Counter/Packetproof/DB row etc.)
+- Notes: (optional)
+- Kanon-Ref: (optional) B310 §… (Delta-Stub)
+
+Referenzregel:
+- Wenn ein SA-Kapitel einen konkreten Nachweis meint, referenziert es eine V-ID (statt Ablauf/Tooling dort zu duplizieren).
+ - Dass konkrete Tooling-Details (z.B. tcpdump/radsniff Packetproof) in V-IDs als Evidence dokumentiert werden, nicht als Normtext in K1–K9.
+	 
+Reservierung / Existenz-Anker:
+- V-K6-01 ist reserviert/geführt als “Completeness-Check” für K6 (SA-ENF) (struktureller Nachweis, kein Tooling-Zwang).
+
+
+K10.3 — BACKLOG REGISTER (NX/OQ) — offene Punkte / Status / Zielanker
+- Zweck:
+  * Register für offene Fragen/Tasks (NX/OQ), ohne Doppelpflege.
+  * Sobald ein Punkt “FEST” wird, bleibt er als Registereintrag erhalten; die alte offene Textstelle wird entfernt.
+
+Registerformat je Item (Template):
+- ID: (NX-xx | OQ-xxx)
+- Kurzbeschreibung: (1 Satz)
+- Status: (OPEN | FEST | MOVED | DROPPED)
+- Ziel-Anker (SA): (z.B. K5.<…> / K7.<…> / K6.<…>)
+- Notiz: (optional, 1–2 Stichpunkte)
+- Kanon-Ref: (optional) B… §… (Delta-Stub)
+
+Regel (ENTWURF-fest Mechanik):
+- OPEN -> FEST: Eintrag bleibt im Register (Status FEST + Verweis/Anker); die alte “offene Frage”-Textstelle im Dokument wird gelöscht (keine Doppelpflege).
+
+
+K10.4 — DECISION REGISTER (FEST / EF-IDs) — Entscheidungen als Register, nicht als Normtext
+- Zweck:
+  * Entscheidungen werden als 1-Satz-Registereintrag geführt, mit Verweis auf die normative SA-Stelle.
+  * Normtext lebt ausschließlich im SA-Kapitel (K1–K9).
+
+Registerformat je Entscheidung (Template):
+- EF-ID:
+- Entscheidung (1 Satz):
+- Norm-Anker (SA): (Kx.y)
+- Datum: (optional)
+- Notiz: (optional)
+
+Regel (keine Doppelpflege):
+- Jede “FEST”-Entscheidung bekommt EF-ID + Verweis auf SA-Stelle; nirgendwo sonst wird die Entscheidung nochmal als eigener Normblock gepflegt.
+
+
+Ziel-B-Dateien (Mapping):
+- B310_TESTS_ACCEPTANCE_CATALOG
+- (optional) B290_CHANGELOG_GOVERNANCE
+
+Mapping-Notiz (gegen Doppelpflege):
+- B310 = konkrete Tests/Proofs (Abläufe/Tools/Beweise)
+- K10 = Index/Register (nur Verweise, keine Normwiederholung)
+
+====================================================================
+MERGE-PLAN (DOPPLUNGEN ABBauen) — nur Regeln, keine Inhalte
+====================================================================
+
+M-01 (NX-02 -> K3/K9 Split):
+- Allocation-Contract (ip_slot, Slotspace, v4/v6-Ableitung, Uniqueness, Quarantäne/Reuse, Exhaustion) ist NUR K3 (SA-ALLOC).
+- K3 enthält die Definitionsbasis der Allocation-Domäne (State/Vokabular der Slots/Allocation, SoT-Facts vs Cache) – keine UI/Thresholds.
+- UI/Stats-Ampel (Aggregation, Thresholds, Darstellung) ist NUR K9 (SA-OPSUI) und referenziert K3 für Semantik/States (keine Neu-Definitionen in K9).
+
+--------------------------------------------------------------------
+
+M-02 (NX-?? -> K5-only: Claim/Verify/Hard-Stop/Startzeit):
+- Claim/Verify/Restricted/Disabled/Revoked/Hard-Stop inkl. TTL/Reset/Startzeit-Definition + DB-Outage-Policy ist NUR K5 (SA-STATE).
+- K5 enthält die vollständige State-Machine + Transition-Regeln + Zeitlogik (Startzeit/Deadline/Grace) und die fail-closed Regeln bei DB_UNKNOWN/DB_DOWN.
+- Andere Kapitel dürfen nur Trigger-/State-Namen nennen (Ref-only) und müssen auf K5 verweisen (keine Semantik/TTL/Reset außerhalb K5).
+- Settings-Parameter (TTL/Grace/Max-Stale etc.) werden als Key-Namen geführt und verweisen auf K7 (SA-SETTINGS); die Semantik “wie wirken sie” bleibt trotzdem K5.
+
+--------------------------------------------------------------------
+
+M-03 (DB-Outage zentralisieren -> K5):
+- DB_DOWN / DB_UNKNOWN Policy (fail-closed, stale-safe, unknown handling) ist NUR K5 (SA-STATE).
+- Außerhalb K5 sind DB-Outage-Bezüge strikt Ref-only:
+  "Ref-only: DB_DOWN/DB_UNKNOWN gilt wie K5 (SA-STATE)."
+- K9 darf DB-Outage nur als UI-Degradation beschreiben (unknown/stale Anzeige), ohne Policy-Semantik zu definieren (Policy bleibt K5).
+
+--------------------------------------------------------------------
+
+M-04 (nftables Materialisierung -> K6):
+- nftables Materialisierung (sets, v4/v6 parity, apply, reconcile, reconcile-hook) ist NUR K6 (SA-ENF).
+- K6 definiert die Materialisierungs-Domäne: “desired policy” -> “effective nft state” inkl. idempotent apply/reconcile.
+- Außerhalb K6 sind Materialisierungs-Bezüge strikt Ref-only:
+  "Ref-only: nftables apply/reconcile/sets/v4-v6 parity siehe K6 (SA-ENF)."
+- K7 darf hierfür nur Key-Namen (settings) führen; Semantik/Hook/Apply bleibt K6.
+
+--------------------------------------------------------------------
+
+M-05 (IKEv2/PSK/EF-002 -> K8 + K10 Register):
+- Normtext zu IKE/PSK/Gate-0 Ops-Contract ist NUR K8 (SA-IKE).
+- EF-002 ist ein FEST-Entscheidungsmarker und wird NUR als Registereintrag in K10.4 (DECISION REGISTER) geführt.
+- Außerhalb K8/K10 gilt:
+  * PSK/IKE Semantik ist Ref-only: "siehe K8 (SA-IKE)"
+  * EF-002 wird nicht als eigener Normtext wiederholt; nur Verweis auf K8 + Registereintrag in K10.
+
+--------------------------------------------------------------------
+
+M-06 (DoD Doppelungen -> K10 als Index):
+- DoD-Details (konkrete Checks/Fail-Paths/Recovery/Abuse/Observability) bleiben kapitel-lokal in K3–K9 (je Kapitel eigenes Kx.DoD).
+- K10 ist NUR Index/Register:
+  * DoD INDEX (PH1–PH6) = Verweise auf Kx.DoD + optional B310
+  * VALIDATION REGISTER (V-IDs) = Schema + Register (keine Abläufe)
+  * BACKLOG / DECISION Register = Registereinträge (1 Satz + SA-Verweis)
+- Außerhalb der SA-Kapitel gilt: Ref-only statt DoD-Duplikat.
+  Standardformel: "Ref-only: DoD/Nachweise siehe Kx.DoD (SA-…) + ggf. V-ID (K10.2)."
+- B310 ist der Ort für konkrete Proofs/Abläufe/Tooling; K10 referenziert B310 nur (kein Copy).
+
+====================================================================
+REF-ONLY REGELN (DAMIT DRIFT NICHT WIEDER ENTSTEHT)
+====================================================================
+
+R-01 Service-IP Mapping (K1-only):
+- Service-Targets (z.B. DNS, WEB, NTP, PANEL, DIAG) werden als symbolische Target-IDs geführt.
+- Die bindende Zuordnung Target-ID -> (IP v4/v6, optional Port/Proto) wird NUR in K1 (SA-NET) definiert (einzige Quelle).
+- Außerhalb K1 gilt strikt Ref-only:
+  * Keine IP-Literale, keine Service-IP-Listen, keine “neuen Targets” definieren.
+  * Erlaubt ist nur: Target-ID nennen + Verweis auf K1 (SA-NET) + 1 Satz Kontext.
+- K6/K9 dürfen Targets verwenden (Enforcement/Diag/UI), aber niemals deren Mapping festlegen oder duplizieren.
+
+R-02 Restricted Trigger (K5 Semantik / K6 Enforcement):
+- Bedeutung/Semantik der States (z.B. RESTRICTED/UNRESTRICTED + Untergründe wie CLAIM_REQUIRED/UNCLAIMED_OVERDUE/…),
+  inkl. Transition-Regeln, TTL/Grace/Reset/DB-Outage, ist NUR K5 (SA-STATE).
+- Enforcement/Umsetzung dieser States (nftables overlays, allowlists, redirects, DNAT, peer isolation, materialize/apply/reconcile)
+  ist NUR K6 (SA-ENF).
+- Außerhalb K5/K6 sind State-Bezüge strikt Ref-only:
+  * Erlaubt: State-/Trigger-Name nennen + "Ref-only: Semantik siehe K5; Enforcement siehe K6."
+  * Verboten: State-Semantik außerhalb K5 oder Enforcement-Details außerhalb K6 zu definieren.
+
+R-03 Settings Keys (K7-only: Keys/Defaults/Resolution):
+- Die bindende Definition von Settings-Keys (Name, Typ, Default, Allowed Override Scope, Resolution Order, Validierungsregeln)
+  ist NUR K7 (SA-KEY).
+- Außerhalb K7 sind Settings-Bezüge strikt Ref-only:
+  * Erlaubt: Key-Name nennen + "Ref-only: Key-Definition/Default/Scope/Resolution siehe K7."
+  * Verboten: Default-Werte, Allowed Override Scope, Resolution Order, Typ/Validation oder “implizite Semantik” eines Keys außerhalb K7 zu definieren.
+- K5/K6/K9 dürfen Keys als Inputs/Parameter referenzieren, aber nie deren Key-Spezifikation duplizieren oder überschreiben.
+
+R-04 ONLINE vs effective_state (K5 Semantik / K9 Operative Quelle):
+- effective_state (Definition, Ableitung aus Facts, fail-closed/DB-Outage Verhalten, State-Semantik/Transitions) ist NUR K5 (SA-STATE).
+- ONLINE (Quelle/SoT der Online-Ansicht), Collector/Accounting-Mapping, Janitor (stale/repair/backfill) und Panel-Ableitungen sind NUR K9 (SA-OPSUI).
+- Außerhalb K5/K9 gilt strikt Ref-only:
+  * Erlaubt: "Ref-only: effective_state siehe K5; ONLINE/Collector/Janitor siehe K9." + 1 Satz Kontext.
+  * Verboten: effective_state Semantik/Transitions außerhalb K5 oder ONLINE/Janitor-Mechanik außerhalb K9 neu zu definieren.
+
+====================================================================
+COPY-PLAN (WIE DU SPÄTER INHALTE UMSORTIERST) — ohne Inhalte
+====================================================================
+
+1) Erzeuge die neue Datei (diese hier).
+2) Kopiere Inhalte aus ENTWURF_SORTIERT_v1.txt kapitelweise in die passende K-Sektion:
+   - A -> K2
+   - B -> K1
+   - C (+NX-02 Slot-Mapping) -> K3
+   - D -> K4
+   - E (+NX-06/NX-07 + Fest-Claim/Hard-Stop) -> K5
+   - F (+nft materialize fest) -> K6
+   - G -> K7
+   - H (NX-01/PSK/IKE) -> K8
+   - I (ONLINE/Janitor/Stats) -> K9
+   - J -> K10 (Index/Register statt Wiederholung)
+
+3) Beim Kopieren sofort Dopplungen nach SA/Ref-only Regeln umwandeln:
+   - Wenn Thema schon als SA existiert -> nur Ref-only lassen.
+
+====================================================================
+CHANGELOG
+====================================================================
+v1.0.11 (2026-01-18)
+- K9 (SA-OPSUI) als Single-Anchor ausgebaut: ONLINE-SoT Definitionen (strict getrennt von effective_state), Collector/Accounting Abgrenzung, Session-Mapping + mapping_quality, Janitor Pattern (stale/repair/backfill) ohne Policy-State-Mutation (Write-Path Ref K5), DB-Outage UI-Degradation (unknown/stale ohne silent defaults), /diag Mindestinhalte + Secrets-Grenzen, Ref-only Regeln, Kanon-Refs/Delta-Stub, DoD-Ideen.
+- Header-Version auf >= Changelog-Top ausgerichtet (Konsistenzfix).
+v1.0.10 (2026-01-18)
+- K10 um VALIDATION REGISTER (V-IDs) erweitert; V-K6-01 als struktureller Completeness-Check für K6 (SA-ENF) eingeführt (keine Norm-Inhalte, nur Checkliste).
+- K8 (SA-IKE) von Placeholder zu strukturierter Single-Anchor-Sektion ausgebaut: Begriffsrahmen, PSK Ops-Contract, Legacy-Constraints, Ref-only Regeln, Kanon-Refs/Delta-Stub, DoD-Ideen.
+v1.0.9 (2026-01-18)
+- K7 (SA-SETTINGS) als Single-Anchor ausgebaut: SQL-first Settings-Domäne (catalog + values), Key-Naming/Datatypes, deterministische Resolution Order, allowed_override_scope Guardrails, Missing vs Invalid (security-relevant), fail_class Contract, Traceability/Explainability (für /diag), Keypflicht für Token/Claim/DNS/QoS Parameter, Ref-only Regeln, Kanon-Refs/Delta-Stub, DoD-Hinweise.
+v1.0.8 (2026-01-18)
+- K6 (SA-ENF) als Single-Anchor ausgebaut: Enforcement-Punkte (nft/AAA/DNS), Reachability nur via SERVICE_* Symbole (K1), Restricted Overlay (Default-Deny + Allowlist), Full-Tunnel/NAT Contract, DNS-Zwang Contract (v4/v6 parity), Isolation/Abuse Controls, Apply/Reconcile Hookpoints (idempotent), Observability-Pflichten, Ref-only Regeln, Kanon-Refs/Delta-Stub.
+v1.0.7 (2026-01-18)
+- K5 (SA-STATE) als Single-Anchor ausgebaut: Facts vs effective_state (fail-closed), State-Modell-Struktur, deterministische Transitions, TTL/Grace/Reset Contract, DB-Outage (DB_DOWN/DB_UNKNOWN, non-escalation, stale-safe, max-stale, reconcile), Verify/Claim Contract, Write-path Matrix-Pflicht, Ref-only Regeln, DoD-Hinweise, Kanon-Refs/Delta-Stub.
+v1.0.6 (2026-01-18)
+- K4 (SA-PROV) als Single-Anchor ausgebaut: Create/Ready-Gates, Mismatch-Hardfails, Promote/Demote (optional), Idempotenz/Concurrency, Recovery-Abgrenzung, Ref-only Regeln, DoD-Hinweise, Kanon-Refs/Delta-Stub.
+v1.0.5 (2026-01-18)
+- K3 (SA-ALLOC) als Single-Anchor ausgebaut: SoT-Objekte, Allocation-Scope, Concurrency/Uniqueness-Contract, Quarantäne/Reuse, Exhaustion Hard-Fail, Reconcile-Abgrenzung, Ref-only Regeln, DoD-Hinweise, Kanon-Refs/Delta-Stub.
+v1.0.4 (2026-01-18)
+- K2 (SA-KEY) als Single-Anchor ausgebaut: Primary Policy Key/Identity Objects/Invarianten/SoT-Regeln, Ref-only-Verbote, DoD-Hinweise, Kanon-Refs/Delta-Stub.
+v1.0.3 (2026-01-18)
+- K1 (SA-NET) als Single-Anchor ausgebaut: Zonenmodell/Pools/Service-Mapping als einzige Quelle für harte IPs/CIDRs, Symbolnamen-Regel (SERVICE_*), Ref-only-Konvention, DoD-Hinweise.
+v1.0.2 (2026-01-18)
+- K0-Header (Titel/PH/Single-Anchor) wieder eingefügt, damit K0 als Kapitel eindeutig referenzierbar ist.
+v1.0.1 (2026-01-18)
+- K0 (Meta / Scope / Leseregeln) inhaltlich finalisiert: Arbeitsprinzipien, Ref-only/Kanon-Ref/Delta-Format, Decision-Register-Regel, ENTWURF-fest Logik.
+v1.0.0 (2026-01-18)
+- Initiale Skeleton-Datei "Patch Vorbereitung" erstellt: K0–K10 Struktur (Theme-first), SA/Ref-only Regeln, Merge-Plan, Copy-Plan, B-Datei-Mapping.
+- Enthält bewusst keine übernommenen Inhalte aus ENTWURF_SORTIERT_v1.txt.

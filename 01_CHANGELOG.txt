@@ -1,13 +1,69 @@
 xp-vpn-stack/01_CHANGELOG.txt
 ================================================================================
 TITLE: MASTER CHANGELOG
-VERSION: v2.4
-DATUM: 2026-01-11
+VERSION: v2.6
+DATUM: 2026-01-23
 STATUS: ACCEPTED
 OWNER-INTENT: Chronologischer Master-Changelog (kanonisch), der Änderungen und Migrationen nachvollziehbar festhält.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 ================================================================================
 ERRATA (KANONISCHKEIT): Der Changelog kann historische Begriffe enthalten. Maßgeblich für den aktuellen Stand sind MASTER/Glossar/Blocks. Historische Begriffe sind nicht kanonisch.
+
+- v2.6.0 (2026-01-23):
+  - PH1 Kanon-/DoD-Closure (Prinzipien & Tests):
+    - Exposure-by-Binding (Binding-first) als Primärmodell explizit kanonisiert:
+      - WAN „Closed“ primär durch Nicht-Binden an WAN (0.0.0.0/::), nicht als pauschales Host-DROP.
+      - WAN-Minimal-Exposure: dauerhaft nur VPN-Endpunkte; alles andere „nicht OPEN“ (CLOSED/FILTERED ok).
+      - Default-Deny als Doktrin primär für die Client-Bubble (FORWARD/NAT/XFRM), nicht als Blanket für Host-INPUT.
+    - Betroffene Root/Blocks: 02_GLOSSAR, B030, B100, B290, B310.
+
+  - Hybrid Gate-0 (LEGACY vs ADMIN/MODERN) festgezogen:
+    - LEGACY bleibt Gate-0=PSK (IKEv1/L2TP) unverändert.
+    - ADMIN/MODERN (IKEv2) Gate-0=Server-Zertifikat/Trust (Public CA, konkret Let’s Encrypt), kein PSK.
+    - Kein Client-Zertifikatsmodell für ADMIN/MODERN; Gate-1 bleibt Username/Password via EAP/RADIUS (SQL-first).
+    - Betroffene Blocks: B059 (Gate-0 Cert-Trust), B040, B050, B290, B310.
+
+  - Dual-Stack Contract (ADMIN/MODERN) + Service-SoT (v4/v6 parity):
+    - Service-Netz + VPN-Netze um v6-SoT erweitert (SERVICE_NET_v6 / MODERN_VPN_NET_v6); LEGACY bleibt v4-only.
+    - DNS-Stack/DNS-Enforcement/Peer-Isolation/NFT Full-Tunnel auf v4+v6 Parität für ADMIN/MODERN präzisiert (kein v6 bypass).
+    - Service-Scopes/Bindings/Targets konsistent auf SERVICE_* Anker gehoben (inkl. v4+v6 Listener, Zone-0 Services).
+    - Betroffene Docs/Blocks/Decisions: docs/nft_service_ip_scopes, B060, B120, B130, B200, B210, B063, B300, D003, D001, D006, D011.
+
+  - SQL-first Settings-Hygiene (TTL/Lock/Policy-Leaks beseitigt):
+    - Lock-TTL vollständig SQL-first gezogen: active_session_lock_ttl_seconds als kanonischer Key (SoT=B057).
+    - Entfernt/entkoppelt „20s“-Literale bzw. lokale TTL-Defaults in konsumierenden Blöcken; Referenzrichtung „gemäß B057“.
+    - FAIL_SAFE_HARDCAP Norm (B057) erfüllt: explizite failsafes ergänzt (u.a. tail_reserve_slots=0, online_window_seconds=300).
+    - Testkatalog (B310) von Fixzahl-Assertions entkoppelt: Tests validieren „TTL abgelaufen gemäß Settings“ statt „~20s/~25s“.
+    - Betroffene Blocks: B057, B056, B169, B171, B310.
+
+  - Panel/Role-Change Contract (Promotion/Demotion) konsolidiert:
+    - Promotion/Demotion Contract in Panel-Owner-Block integriert; B062 als eigener Block entfernt (Konzept-Spuren/Referenzen nachgezogen).
+    - Panel Security Model: conn_group als SQL-Input/SoT, connection_login Guard/Equality (PPP Username == subaccount_login) konsistent dokumentiert.
+    - Betroffene Blocks: B280, B285, B155, B055, B061, B310.
+    - Hinweis (Kanon-Hygiene): einzelne Alt-Referenzen/Changelog-Spuren auf „B062“ existieren noch in Root/Blocks und sind als Drift-Leichen zu bereinigen.
+
+  - Operability/Wiring Updates (IKEv2 + Hooks):
+    - IKEv2 Wiring via VICI als Pflicht-Mechanik (statt updown), Debounce/Session-Mapping/Kill-Handles präzisiert.
+    - systemd/Healthchecks Targets auf SERVICE_* SoT korrigiert.
+    - Betroffene Blocks: B166, B167, B180.
+
+  - PH-System konsolidiert/erweitert:
+    - B290 als alleiniger SoT für Phasenplan auf PH1–PH10 erweitert (Restricted/Quota, Monitoring/Stats/Export, Extras).
+    - IP-Lifecycle/Reconcile-Drift-Guard referenziert PH1–PH10 als Ordnungsrahmen.
+    - Betroffene Root/Blocks: B290, B064, 04_BLOCK_INDEX.
+
+  - Nachgezogen / nicht explizit gelistete, aber im Stand enthaltene Änderungen (v2.6.0):
+    - B058: Theme A (Admin-UI) als deterministische Basis für konsistentes Branding/Layout; v2.6 zählt diesen Block als Teil der Webpanel-Foundations.
+    - B150: Restricted Mode/Walled Garden um v4/v6-Parität ergänzt (kein v6-Bypass); Allowlist/Policy-Hooks präzisiert.
+    - B220/B230/B240/B250/B260: Webstack-/Service-Scope- und Ops-Details (Service-IP/Scope/v6-Parität/TLS-Footprint) konsolidiert; Klarstellungen ohne Architekturänderung.
+    - B270: /diag Scope & Safety (v4/v6) nachgezogen; klare Abgrenzung „read-only“ vs „admin-only“.
+    - B330: Logging/Retention/Rotation-Hygiene (Disk-Full-Risiko) ergänzt/geschärft; keine Policy-Leaks in Logs.
+    - B340/B342/B344: Fail2ban/Reason-Codes/Enforcement-Hygiene nachgezogen (B062-Removal-Folgen).
+    - B168: Settings-/Janitor-Hygiene ergänzt (Ref-only/No-Magic-Defaults konsequent).
+    - B010: Meta-/Scope-Hygiene (kleine redaktionelle Korrekturen, keine Semantik).
+    - Repo-Doku: Stale Referenzen auf nicht vorhandene Dateien (z.B. 0_MASTERKONZEPT_ANALYSE.md) entfernt/ersetzt; Master-Files auf v2.6 umgestellt (00_MASTER_v2.6 / ZEILENFEST v2.6).
+
+
 
 - v2.5.0 (2026-01-15):
   - Redaktion + Terminologie-Konsistenz (global):

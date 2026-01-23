@@ -2,11 +2,11 @@ xp-vpn-stack/blocks/B230_HTTPS_BLOCKPAGE_MITM_CA.txt
 ================================================================================
 BLOCK-ID: B230
 TITLE: HTTPS Blockpage (MITM) / CA / On-the-fly Certs / RateLimit
-VERSION: v1.0
-DATUM: 2026-01-06
+VERSION: v1.1
+DATUM: 2026-01-20
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B150, B200, B220
+REQUIRES: B060, B200, B220, B250, B260, docs/nft_service_ip_scopes.txt
 INFLUENCES: alle
 OWNER-INTENT: HTTPS Blockpage ohne Warnungen auf XP/MyPal.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
@@ -19,19 +19,26 @@ NOTES:
 
 1) ZWECK
 - Wenn AdGuard blockt:
-  - DNS antwortet 10.77.0.1
-  - HTTP + HTTPS landen auf Sperrseite
-- HTTPS soll ohne Warnung funktionieren:
-  - interne Root-CA vertrauenswürdig im Client (Windows + MyPal NSS)
-  - OpenResty erzeugt leaf cert pro SNI host (oder cached)
+  - AdGuard "Blocking mode: Custom IP" antwortet SERVICE_WEB 10.77.0.3 (nicht 10.77.0.1)
+  - HTTP + HTTPS landen auf interner Sperrseite (SERVICE_WEB 10.77.0.3:80/443)
+- HTTPS soll ohne Warnung funktionieren (Legacy-Target XP/MyPal):
+  - interne Root-CA ist vertrauenswürdig im Client
+    - Windows Trust Store (OS)
+    - MyPal NSS Store (Browser)
+  - OpenResty erzeugt leaf cert pro Host (SNI/Host) und cached diese (SNI/Host -> cert)
+  - Ziel ist „no warning“ primär für MyPal (SNI-fähig) + typische Browser-Requests
 
 2) GRENZEN
 - Nicht 100% gegen Pinning/HSTS-Edgecases garantierbar.
-- Nur Browser/typische HTTP(S) requests; Apps mit Pinning können scheitern.
+- Apps/Clients mit Certificate Pinning können scheitern (akzeptierte Limitation; kein generelles MITM).
+- Legacy/SNI:
+  - „No warning“ ist primär für MyPal/Browser gedacht (SNI-fähig).
+  - HTTPS-Clients ohne SNI können keine host-spezifische Zertauswahl erzwingen -> können Warnungen sehen (akzeptierte Limitation).
+- Nur Blocklisten-Ziele: MITM/Blockpage ist strikt auf AdGuard-Blockfälle (Custom IP -> SERVICE_WEB 10.77.0.3) begrenzt, nicht als genereller Proxy/MITM missbrauchbar.
 
 3) ABHÄNGIGKEITEN
-- Requires: B220, B200, B260
-- Influences: UX, support, B250 (Client trust store integration)
+- Requires: B060, B200, B220, B250, B260, docs/nft_service_ip_scopes.txt
+- Influences: UX, support, B150 (Restricted Allowlist muss SERVICE_WEB:443 zulassen)
 
 4) INPUTS
 - Root-CA (offline storage optional; operational policy)
@@ -40,13 +47,23 @@ NOTES:
 - Cert cache (SNI->cert)
 
 5) OUTPUTS
-- Blockpage served on HTTP and HTTPS for blocked domains
-- Minimal info: URL blocked reason, optional "allowlist request" message
+- Blockpage served on HTTP and HTTPS for blocked domains (SERVICE_WEB 10.77.0.3:80/443)
+- Minimal info:
+  - "blocked" + reason-code (ohne interne Details/PII)
+  - optional: "allowlist request" Hinweistext (ohne Kontakt-/Admin-Infos, die Enumeration erleichtern)
+- Keine Admin-Funktionen/Endpoints auf der Blockpage-Route (Scope-Trennung ist Pflicht; admin-only bleibt admin-only).
 
 6) MUST (wenn aktiv)
-- MyPal NSS import must succeed for "no warning" target.
-- Rate limiting + caching required to prevent CPU DoS.
-- Blockpage web must not expose admin functions.
+- Service-Bindings (SoT):
+  - Blockpage/HTTPS läuft ausschließlich auf SERVICE_WEB 10.77.0.3:80/443 (kein 10.77.0.1, kein WAN-bind).
+  - AdGuard Blocking mode: Custom IP zeigt auf SERVICE_WEB 10.77.0.3.
+- Trust:
+  - MyPal NSS import muss erfolgreich sein, sonst gilt "no warning" als nicht erfüllt.
+- Caching + RateLimit:
+  - Zert-Erzeugung muss gecached sein (Host/SNI -> cert; TTL/Eviction definiert), sonst CPU DoS.
+  - RateLimit pro client_ip + host (sonst Subdomain-Flood kann Cert-Farm auslösen).
+- Scope/Exposure:
+  - Blockpage-Web darf keine Admin-Funktionen/Tools exponieren (admin-only bleibt ausschließlich ADMIN_VPN_NET 10.77.2.0/24 gemäß docs/nft_service_ip_scopes.txt).
 
 7) OPTIONAL
 - Custom IP block mode for AdGuard (primary)
@@ -58,11 +75,19 @@ NOTES:
 - Some domains still fail -> pinning/HSTS; acceptable limitation.
 
 9) TESTS
-- Block domain -> HTTPS opens blockpage without warning on MyPal.
-- Flood subdomains -> server remains responsive.
+- Blocked domain:
+  - AdGuard liefert Custom IP = 10.77.0.3
+  - HTTPS öffnet Blockpage auf SERVICE_WEB 10.77.0.3 ohne Warnung auf MyPal (NSS Trust vorhanden).
+- Negative:
+  - Ohne NSS-Import muss ein Warnzustand sichtbar sein (zeigt, dass Trust wirklich Voraussetzung ist).
+- Flood/DoS-Resistenz:
+  - Subdomain-Flood (viele Hostnames) erzeugt keine unbounded CPU/Load (RateLimit+Cache greifen; Server bleibt responsive).
+- Scope:
+  - User/Restricted erreichen Blockpage (443) nur als Blocklisten-Ziel; keine Admin-Endpunkte erreichbar (Admin-Tools nur aus 10.77.2.0/24).
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.1 (2026-01-20): Blockpage/MITM auf SERVICE_* SoT gehoben: AdGuard Custom IP -> SERVICE_WEB 10.77.0.3 (statt 10.77.0.1), Blockpage über 10.77.0.3:80/443; Requires/Dependencies konsistent zu B060/B200/B220/B250/B260 + docs/nft_service_ip_scopes.txt; MUST um Bind/Trust/Cache+RateLimit/Scope erweitert; Tests/Constraints (SNI/Legacy) präzisiert.
 - v1.0: Initial
 ================================================================================

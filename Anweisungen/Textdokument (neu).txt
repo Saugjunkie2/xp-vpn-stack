@@ -1,0 +1,20 @@
+danke für die liste, hast du bock weiter an einen entwurf zu arbeiten? ich hab mega viel in einem entwurf und würde das gerne weiter ausarbeiten, damit ich das ins konzept übertragen kann. 
+1. der entwurf ist soll, weill dieser das konzept sehr stark ändert. 
+2. ich möchte das der entwurf in ishc, damit meine ich rein innerhalb des entwurfs keine drifst und auch keine wiedersrüche hat.
+2. es gilt aber immer erst die entwurf Datei und dann das vorhandene Konzept.
+2. “ENTWURF-fest” wenn wir eine frage fest gemacht haben, und es dann momentan keine weiteren Punkte und oder Fragen gibt, möchte ich das im entwuef schon speichern und das heist, ich brauche patch anweisungen, damit ich die frage im entwurf löschen kann. Da das konzept aber auch schon sehr weit ist, sollten wir das konzept bei jeder frage mit einbeziehen, ala was sagt das konzept zu der frage.
+
+
+
+
+danke für die liste, hast du bock weiter an einen entwurf zu arbeiten? ich hab mega viel in einem entwurf und würde das gerne weiter ausarbeiten, damit ich das ins konzept übertragen kann. der entwurf ist soll, weill dieser das konzept sehr stark ändert. ich möchte über alles diskutieren und dann als entwurf fest machen und zuletzt dann patch anweisungen haben wollen für die enwurf datei. Die entwurf datei wird ohne versionierung und ohne changelog bearbeitet.
+es gilt aber immer erst die entwurf Datei und dann das vorhandene Konzept.
+“ENTWURF-fest” wenn wir eine frage fest gemacht haben, und es dann momentan keine weiteren Punkte und oder Fragen gibt, möchte ich das im entwuef schon speichern und das heist, ich brauche patch anweisungen, damit ich die frage im entwurf löschen kann. Da das konzept aber auch schon sehr weit ist, sollten wir das konzept bei jeder frage mit einbeziehen, ala was sagt das konzept zu der frage.
+
+
+
+
+wir müssen uns mal um die dateien kümmern, das heist wir müssen wirklich sehr langsam, sehr genau, unheimlich tief und sehr detailiert arbeiten. 
+Als erstes, musst du mir erklären, wie funktioniert die patch vorbereitung, den der inhalt aus entwurf muss in patch vorbereitung rein.
+Damit es keine verwechselungen gibt, weill ich ständig neue dateien hochladen muss, gilt immer die zuletzt hochgeladene datei als aktuelle datei.
+Solltest du B Dateien benötigen, dann sage mir das, dann lade ich die hoch.

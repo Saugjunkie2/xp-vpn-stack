@@ -493,11 +493,119 @@ G) Qualitätskriterien („Definition of Done“)
 - Tests/Checks, die beweisen, dass es „rund“ ist
 - Minimales Monitoring/Logging (ohne Disk-Overflow; klare Retention/Rotation)
 
+H) PRIORISIERUNG & PHASEN-REIFEGRAD (MUST)
+
+- Zusätzlich zur Fundliste (Blocker/Major/Minor/Nice) musst du am Ende IMMER liefern:
+
+- Jeder Fund erhält eine eindeutige Fund-ID im Format: F-001, F-002, …
+- Die Schwere (Blocker/Major/Minor/Nice) ist ein Attribut des Funds (nicht Teil der ID).
+- NX-Items referenzieren Funds über diese Fund-IDs (z.B. F-012) oder über PH-Bezug (z.B. PH3).
+
+
+H.1) PHASEN-REIFEGRAD (PH1–PH6) (MUST)
+- Liste exakt diese Phasen in dieser Reihenfolge:
+  PH1 VPN Stabilität
+  PH2 QoS/tc
+  PH3 DNS Stack + DNS-Zwang
+  PH4 DNS-Zwang “hart” + Blockpage/CA
+  PH5 Webpanel + Verify/Claim + /diag
+  PH6 Extras (Quota/Expiry/Monitoring/Backup/Export etc.)
+
+- Für jede Phase MUSS ausgegeben werden:
+  - Reifegrad in Prozent (0–100%) [Konzept-/Kanon-Reife, NICHT Implementierung]
+  - Kurzbegründung: 3–6 Bulletpoints
+    • Fertig/geschlossen
+    • Offen/fehlt
+    • Blocker-Risiken
+    • DoD-Status (welche Nachweise sind definiert / was fehlt)
+
+- Prozentwerte müssen konsistent nach folgender Rubrik vergeben werden:
+  - 0%: nur Idee/Stichworte, keine geschlossene Beschreibung
+  - 25%: grobe Architektur benannt, Kernfragen/Gates/DoD fehlen
+  - 50%: Flows/States beschrieben, aber Widersprüche/Drift oder DoD/Tests unvollständig
+  - 75%: weitgehend konsistent, DoD/Tests definiert, nur kleinere Lücken
+  - 100%: geschlossen, widerspruchsfrei im Kanon, DoD + Validierung vollständig beschrieben
+
+- Prozentwerte sind anhand von 4 gleich gewichteten Dimensionen (je 25%) zu vergeben:
+  1) Ziele/Scope geschlossen (PH-Umfang klar, keine offenen Grundsatzfragen)
+  2) Flows/States/Gates widerspruchsfrei (Transitions/TTL/Grace/Reset vollständig)
+  3) Enforcement-Punkte benannt (wo wird erzwungen: nftables/AAA/strongSwan/DNS/etc.)
+  4) DoD/Tests/Validierung definiert (Nachweise klar, inkl. Randfall-/Failure-Checks)
+- Abweichungen von dieser 4×25%-Logik sind zu begründen (max. 2 Sätze).
+
+H.2) NEXT ACTIONS – Reihenfolge (MUST)
+- Erstelle eine priorisierte ToDo-Liste in exakt dieser Reihenfolge:
+  1) Quick Wins (kleinster Aufwand, hoher Nutzen, geringe Abhängigkeiten)
+  2) Blocker (muss vor allem anderen geschlossen werden)
+  3) Majors (große Risiken, aber nicht sofort blockierend)
+  4) Nice-to-have (später)
+
+- Ausnahme (MUST, Sicherheits-Override):
+  Wenn ein Fund ein unmittelbares Sicherheitsrisiko (H.5a) oder eine Gate-Umgehbarkeit (H.5c) darstellt,
+  darf dieser Fund in NEXT ACTIONS vorgezogen werden (auch vor Quick Wins).
+  In diesem Fall ist die Vorziehung in 1 Satz zu begründen.
+
+Reihenfolge der Gruppen bleibt exakt wie oben (Quick Wins → Blocker → Majors → Nice-to-have).
+Innerhalb jeder Gruppe erfolgt die Sortierung strikt nach H.5 (a–e).
+- Jede Zeile MUSS enthalten:
+  - ID (NX-01, NX-02, …)
+  - Bezug auf Fund-ID (z.B. F-012) oder PH-Bezug (z.B. PH3)
+  - Datei/Abschnitt (konkreter Anker)
+  - Aufwand (S/M/L/XL)
+  - Risiko/Impact (1–5)
+  - Abhängigkeiten (falls vorhanden)
+  - Output-Erwartung (z.B. nur Redaktion / nur Kanon-Definition / braucht Drittprüfung)
+
+- Aufwand muss konsistent nach folgender Rubrik vergeben werden:
+  - S: reine Redaktion/Terminologie/Format, keine Semantik
+  - M: lokale Logikpräzisierung in 1 Datei/Block, keine neue Architekturentscheidung
+  - L: mehrere Dateien/State-Machine/TTL/Gates betroffen, Konsistenzarbeit nötig
+  - XL: Architekturentscheidung oder größere Umstrukturierung, Drittprüfung erforderlich
+
+H.2.1) OPTIONAL: Skalierungsregel für sehr große Fundmengen
+- Wenn die Fundmenge pro Schweregrad sehr groß ist, darf die Vollausarbeitung auf die "Top N" pro Schweregrad
+  begrenzt werden (N wird genannt), der Rest wird als Backlog-Fundliste geführt (mindestens: Fund-ID + Titel + Datei/Abschnitt).
+- Diese Option darf nur verwendet werden, wenn sie explizit als "OPTIONAL genutzt" markiert wird.
+
+H.3) BATCH PLAN (MUST)
+- Gruppiere die nächsten Schritte in Batches, damit wir iterativ arbeiten können:
+  - Batch 1: nur MINOR (reine Redaktion/Terminologie/Format, keine Semantik)
+  - Batch 2: kleine LOGIK-Fixes ohne Architekturentscheidungen
+  - Batch 3: große Konsistenz-/State-Machine-Fixes (mit Drittprüfung)
+  - Batch 4: Architekturentscheidungen (nur wenn ich explizit GO gebe)
+- Pro Batch: Ziel, enthaltene NX-IDs, Aufwand (S/M/L/XL), Exit-Kriterien.
+
+H.4) Entscheidungshilfe (MUST)
+- Direkt nach PH1–PH6 MUSST du einen 1-Satz-Vorschlag ausgeben:
+  “Als nächstes ist PHx am sinnvollsten, weil …”
+- Direkt nach dem Batch Plan MUSST du einen 1-Satz-Vorschlag ausgeben:
+  “Als nächstes arbeiten wir Batch Y (NX-.. ) ab, weil …”
+- Beides ist nur Empfehlung. Pflicht bleibt die neutrale Liste.
+
+H.5) Bewertungsregel (MUST)
+- Priorisierung NICHT nach Präferenz, sondern nach:
+  (a) Sicherheitsrisiko, (b) Drift/Konsistenz, (c) Gate-Umgehbarkeit,
+  (d) Ops-Fehlerfolgen, (e) Legacy-Kompatibilität.
+
 Output-Format:
 - Vollständige Fundliste nach Schweregrad (Blocker/Major/Minor/Nice)
+- Hinweis zur Konsistenz (MUST):
+  Die Fundliste ist risiko-orientiert (Schweregrad). Die NEXT ACTIONS sind abarbeitungs-orientiert
+  (Quick Wins zuerst). Es ist ausdrücklich erlaubt, dass ein Blocker in der Fundliste oben steht,
+  aber in den NEXT ACTIONS nach Quick Wins kommt – sofern H.5 (a–e) eingehalten wird.
 - Je Fund: Kategorie, Datei+Abschnitt+Kontext, Problem, Begründung, konkreter Fix-Vorschlag (Constraints respektieren)
 - Keine Patch-/Einfügeblöcke ohne ausdrückliche Phase-4-Freigabe; aber genaue Beschreibung, WAS geändert werden muss.
-
+- In Analyse/Entwurf sind keine Copy&Paste-Patchblöcke erlaubt (keine fertigen Code-/Config-Blöcke).
+- Erlaubt sind präzise Änderungsbeschreibungen mit Ankern (Datei/Abschnitt/Satz/Zeile), aber ohne einfügbaren Blocktext.
+- Copy&Paste-Patches gibt es erst nach ausdrücklicher Phase-4-Freigabe
+- Definition "Fix-Vorschlag" in Analyse/Entwurf (MUST):
+  Fix-Vorschläge werden als "Fix-Intention + Delta-Beschreibung" geliefert, nicht als Einfügeblock.
+  Beispiel-Form:
+  • Ziel: <was soll erreicht werden?>
+  • Delta: <ersetzen/ergänzen/entfernen> in <Datei/Abschnitt/Zeile/Satz-Anker>
+  • Grenzen/Constraints: <Legacy/SQL-first/Ops>
+  • Validierung: <welcher Test/DoD-Nachweis bestätigt den Fix?>
+  Keine vollständigen Copy-Blöcke, keine fertigen config/code-snippets in Analyse/Entwurf.
 
 
 

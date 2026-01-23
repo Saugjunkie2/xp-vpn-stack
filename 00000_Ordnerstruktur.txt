@@ -1,8 +1,8 @@
 xp-vpn-stack/00000_Ordnerstruktur.txt
 ================================================================================
 TITLE: Ordnerstruktur (SOLL) / ZIP-Abgleich
-VERSION: v1.0
-DATUM: 2026-01-13
+VERSION: v1.9
+DATUM: 2026-01-23
 STATUS: ACCEPTED
 OWNER-INTENT: Single Source of Truth für die Soll-Struktur; Basis für SOLL/IST-DIFF beim ZIP-Verify.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
@@ -36,11 +36,17 @@ xp-vpn-stack/
 │  ├─ B050_SQL_AAA_RADIUS.txt
 │  ├─ B055_DB_SCHEMA_CORE.txt
 │  ├─ B056_RADIUS_SCHEMA_MAPPING.txt
+│  ├─ B057_SETTINGS_PARAMETER_CANON_SQLFIRST_MAGIC_GUARD.txt
+│  ├─ B058_CONN_GROUP_POLICYKEY_DETERMINISTIC_DERIVATIONS.txt
+│  ├─ B059_IKEV2_CREDENTIALS_GATE0_CERTTRUST_OPS_CONTRACT.txt
 │  ├─ B060_NETPLAN_IPS_SEGMENTS.txt
+│  ├─ B061_DUALSTACK_SLOT_MAPPING_PANEL_STATS.txt
+│  ├─ B063_NFT_ENFORCEMENT_ANTISCAN_EGRESS_DNS.txt
+│  ├─ B064_IP_LIFECYCLE_DRIFT_GUARDS_RECONCILE.txt
 │  ├─ B070_CRYPTO_LEGACY_DEBIAN13.txt
 │  ├─ B080_XP_NATT_REGFIX.txt
 │  ├─ B090_MTU_MSS_STABILITY.txt
-│  ├─ B100_NFT_WAN_STEALTH.txt
+│  ├─ B100_WAN_Exposure_Model_(Binding-First, optional Stealth).txt
 │  ├─ B110_NFT_L2TP_ONLY_VIA_IPSEC.txt
 │  ├─ B120_NFT_FORWARD_NAT_FULLTUNNEL.txt
 │  ├─ B130_NFT_PEER_ISOLATION.txt
@@ -75,11 +81,12 @@ xp-vpn-stack/
 │  ├─ B340_FAIL2BAN_RADIUS_EVENT_CLASSIFICATION.txt
 │  ├─ B341_FAIL2BAN_JAILS_POLICY_VALUES.txt
 │  ├─ B342_POLICY_OUTCOME_REASON_CODES_MATRIX.txt
-│  └─ B343_FAIL2BAN_POLICY_OUTCOME_E2E_PACKAGE.txt
+│  ├─ B343_FAIL2BAN_POLICY_OUTCOME_E2E_PACKAGE.txt
+│  └─ B344_DOD_OPEN_DECISIONS_OPEN_QUESTIONS.txt
 ├─ decisions/
 │  ├─ D001_OPENRESTY_OVER_APACHE.txt
 │  ├─ D002_SQL_FIRST_NO_MIGRATION.txt
-│  ├─ D003_TWO_NETS_USER_ADMIN.txt
+│  ├─ D003_SEGMENTATION_SINGLE_WEBPANEL.txt
 │  ├─ D004_MITM_BLOCKPAGE_APPROACH.txt
 │  ├─ D005_OFFLOAD_DEFAULT_VM.txt
 │  ├─ D006_NTP_MANDATORY_XP.txt
@@ -103,5 +110,14 @@ xp-vpn-stack/
 ================================================================================
 CHANGELOG
 ================================================================================
+- 2026-01-23 v1.9: Klarstellung Terminologie (ohne Pfadänderungen): IKEv2 Gate-0 ist Server-Zertifikat/Trust (Public CA, konkret Let’s Encrypt) und NICHT PSK; PSK bleibt ausschließlich Legacy (IKEv1/L2TP). Changelog-Historie bleibt unverändert.
+- 2026-01-21 v1.8: B344 ergänzt (Thema J: DoD + offene Festzurrungen + Entscheidungen + offene Fragen).
+- 2026-01-21 v1.7: B064 ergänzt (IP-Lifecycle, Quarantäne, Random ip_slot Allocation, Drift-Guards, Reconcile; Thema C).
+- 2026-01-21 v1.6: B063 ergänzt (nftables Enforcement / Reachability / DNS / Egress / Anti-Scan; Thema F).
+- 2026-01-21 v1.5: B062 ergänzt (Provisioning / Promotion-Demotion; Thema D).
+- 2026-01-21 v1.4: B061 ergänzt (Dualstack Slot-Mapping + Panel-Stats Contract; Thema I).
+- 2026-01-21 v1.3: B059 ergänzt (IKEv2 Credentials / Gate-0 PSK Ops-Contract).
+- 2026-01-21 v1.2: B058 ergänzt (conn_group Policy-Key / deterministische Ableitungen / Verify-vs-AAA Trennung).
+- 2026-01-21 v1.1: B057 ergänzt (Settings/Parameter Kanon, SQL-first Magic-Guard).
 - 2026-01-13 v1.0: Added VERSION/CHANGELOG sections (protocol compliance).
 ================================================================================

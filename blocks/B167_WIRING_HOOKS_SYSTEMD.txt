@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B167_WIRING_HOOKS_SYSTEMD.txt
 ================================================================================
 BLOCK-ID: B167
 TITLE: Wiring: Hooks + systemd (Apply/Collector/Timer)
-VERSION: v1.15
-DATUM: 2026-01-14
+VERSION: v1.16
+DATUM: 2026-01-23
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B165, B166
@@ -40,6 +40,9 @@ NOTES:
 
 - Runtime Mapping (volatile):
   - /run/vpn-sessions/<ppp_if>.env   (B165)
+- Runtime Mapping (IKEv2, volatile; NX-04/NX-05):
+  - /run/vpn-sessions/ikev2/pending/<IKE_SA_ID>.env
+  - /run/vpn-sessions/ikev2/active/<IKE_SA_ID>.env
 - Runtime-Aktivität (KANONISCH):
   - "vpn_connection_id aktiv?" => true genau dann, wenn mindestens ein VALID Runtime-Mapping in /run/vpn-sessions/*.env existiert,
     dessen CONNECTION_ID=<id> ist (Definition VALID siehe B168; B165 ist darauf abgestimmt).
@@ -119,6 +122,52 @@ Regel:
    - PPPD_PID MUSS aus pppd/ip-up Environment stammen.
    - FORBIDDEN: pgrep/ps zur PID-Ermittlung.
 
+3a) CONNECT TRIGGER (IKEv2, MODERN) — VICI LISTENER (NX-04, MUST)
+- Ziel: Parität zu PPP (D1a „No-Unpoliced-Window“): Erst PENDING (Forward block), dann APPLY, dann OPEN.
+- Mechanismus: Ein systemd-Service lauscht via VICI auf strongSwan Events und ruft vpn-policy-apply deterministisch auf.
+- WICHTIG: updown-Skripte sind für PH1-Fail-Closed nicht kanonisch (FORBIDDEN für NX-04); VICI ist Pflicht.
+
+Trigger-Bedingung (MUST):
+- Ein IKEv2-Connect gilt als „runtime relevant“, wenn:
+  - eine IKE_SA existiert UND
+  - eine CHILD_SA für den Client aktiv ist UND
+  - die Virtual-IP(s) des Clients bekannt sind (v4/v6 optional, aber mindestens eine).
+
+Ablauf (MUST, Reihenfolge fix):
+1) Pending Gate setzen (D1a):
+   - nft: CLIENT_IP4 (falls vorhanden) in connect_pending_v4 aufnehmen
+   - nft: CLIENT_IP6 (falls vorhanden) in connect_pending_v6 aufnehmen
+   - idempotent; mehrfaches Setzen muss harmless sein.
+
+2) Pending Mapping schreiben (REV-02/REV-05):
+   - Pfad: /run/vpn-sessions/ikev2/pending/<IKE_SA_ID>.env
+   - Inhalt (Minimum, MUST): TUNNEL_TYPE=IKEV2, CONNECTION_ID, START_TS, CLIENT_IP4?, CLIENT_IP6?, KILL_HANDLE_TYPE=IKE_SA_ID, KILL_HANDLE_VALUE=<IKE_SA_ID>, STAGE=PENDING
+
+3) Policy Apply (B166, STRICT):
+   - Exec: vpn-policy-apply --connection-id=<CONNECTION_ID> --tunnel-type=IKEV2
+   - Payload/Contract (MUST): Tool muss Tunnel-Type und optionale v4/v6 Felder erkennen (v4-less/v6-less tolerant).
+
+4) Upgrade Pending → Active (atomar, MUST):
+   - Nur bei SUCCESS von vpn-policy-apply:
+     - pending/<id>.env → active/<id>.env (write-temp + rename oder rename-only, aber atomar)
+     - STAGE=ACTIVE setzen
+
+5) Pending Gate entfernen (OPEN):
+   - nft: CLIENT_IP4/CLIENT_IP6 aus connect_pending_* löschen (idempotent)
+
+Failure Handling (Fail-Closed, MUST):
+- Wenn vpn-policy-apply FAIL (Exit !=0) oder TIMEOUT:
+  - Pending Gate bleibt bis Cleanup bestehen (kein Leak-Window)
+  - Session muss TERMINATE werden (Kill-Handle: IKE_SA_ID), damit Client sauber reconnectet.
+  - Pending Mapping bleibt nicht stehen: entweder sofort löschen oder TTL/Janitor greift (B166 Pending Hygiene).
+
+Rekey/Storm Schutz (MUST, aus Drittauflage):
+- Rekey darf keinen „Blind-Apply-Storm“ erzeugen.
+- Regel: IKEv2-Wiring muss Debounce/Dedupe unterstützen:
+  - entweder im Listener (smart debounce),
+  - oder (bevorzugt) in vpn-policy-apply via desired_state_hash / idempotent skip:
+    - Wenn (IPs + effective policy version/flags) unverändert -> APPLY SKIP (Exit 0 + Audit-Flag).
+
 ================================================================================
 4) DISCONNECT TRIGGER (ip-down)
 ================================================================================
@@ -140,6 +189,25 @@ SOLL ausführen (Reihenfolge):
 
 Hinweis:
 - Selbst wenn Cleanup ausfällt, repariert Reconcile (B166) stale state spätestens <= 5 Minuten.
+
+4a) DISCONNECT TRIGGER (IKEv2, MODERN) — VICI LISTENER (NX-04/NX-05, MUST)
+- Ziel: Kernel darf keine stale Pending-Gates oder stale ACTIVE-Mappings behalten.
+- Trigger: IKE_SA/CHILD_SA down (oder TERMINATE-Outcome) für ein IKE_SA_ID.
+
+Ablauf (MUST, idempotent):
+1) Pending Gate entfernen:
+   - Wenn CLIENT_IP4/CLIENT_IP6 bekannt:
+     - nft: aus connect_pending_v4/connect_pending_v6 löschen (idempotent)
+
+2) Active/ Pending Mapping entfernen:
+   - /run/vpn-sessions/ikev2/active/<IKE_SA_ID>.env löschen (falls vorhanden)
+   - /run/vpn-sessions/ikev2/pending/<IKE_SA_ID>.env löschen (falls vorhanden)
+
+Hinweis:
+- Selbst wenn Cleanup ausfällt, repariert Reconcile (B166) stale state spätestens <= 5 Minuten.
+- Unterschied Kill vs Cleanup:
+  - „Disconnect Event“ ist Cleanup.
+  - „Admin/Enforcement Kill“ ist separat (B167 Admin-Hardcut Tooling) und darf unabhängig vom Mapping-Alter terminieren.
 
 ================================================================================
 5) PANEL EVENT TRIGGER (sofortige Wirkung)
@@ -173,6 +241,23 @@ Konzept-Units:
 
 - vpn-policy-reconcile.timer:
   - OnUnitActiveSec=5min
+
+6.1) SYSTEMD: IKEV2 VICI LISTENER (NX-04, MUST)
+- Zweck: strongSwan/IKEv2 Events in deterministische Apply/Kill-Aktionen übersetzen (Fail-Closed, Race-Free).
+- Implementierung als eigener Daemon/Service (keine updown Hooks als Kanon).
+- Service-Name (Konzept): vpn-ikev2-vici-listener.service
+  - After/Wants: strongswan.service (bzw. charon), network-online.target
+  - Restart: always (Crash darf kein Leak erzeugen; Pending TTL/Janitor ist Backstop)
+  - Privileges:
+    - Muss auf VICI-Socket zugreifen können (charon.vici) und nft + kill (vici terminate) ausführen können -> root oder capability-set.
+    - Panel (www-data) darf den Listener NICHT triggern; es triggert nur vpn-policy-apply via sudo (siehe 5) PANEL EVENT TRIGGER).
+
+- Responsibilities (MUST):
+  1) Subscribe auf relevante VICI Events (IKE_SA/CHILD_SA up/down).
+  2) Für „Connect relevant“: Ablauf aus 3a) exakt ausführen.
+  3) Für „Disconnect“: Cleanup aus 4a) ausführen.
+  4) Debounce/Dedupe: Rekey/Storm darf kein Apply-Storm erzeugen (siehe 3a).
+  5) Observability: Jeder Apply/Kill muss einen eindeutigen Audit-Log-Eintrag schreiben (IKE_SA_ID, CONNECTION_ID, IP4/IP6, action, outcome).
 
 ================================================================================
 7) SYSTEMD: ACCOUNTING COLLECTOR TIMER
@@ -333,6 +418,7 @@ Security:
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.16 (2026-01-23): NX-04 IKEv2 Wiring ergänzt (VICI Listener Pflicht statt updown); CONNECT/DISCONNECT für IKEv2 inkl. Pending Gate + Pending/Active Mapping; Debounce/Skip Anforderung; systemd Listener Responsibilities definiert; NX-05 Kill-Handle IKE_SA_ID angebunden.
 - v1.15 (2026-01-14): Konsistenz/Terminologie: Runtime-Aktivitätsdefinition präzisiert ("vpn_connection_id aktiv?" statt "connection_id aktiv?"); ip-up Apply-Aufruf um Klarstellung ergänzt (CONNECTION_ID = vpn_connection_id; Referenz B166). Keine Verhaltensänderung.
 - v1.14 (2026-01-14): Admin Hardcut Tooling gemäß D012 ergänzt: /usr/local/bin/vpn-session-kill + Wiring/Verhaltensregeln (Kill-first -> Reconcile; sudo/Privilege Separation Referenz B285).
 - v1.13 (2026-01-10): Präzisierung: PPP-kill darf nicht vom Runtime-Mapping abhängen; PPPD_PID Quelle ist pppd/ip-up Environment, Mapping nur Spiegel/Diagnose. ip-up Zeitfenster: SQL-Settings nur bei „schnell verfügbar“, sonst sofort Fallback (keine Connect-Latenz/DoS). Konsistenzfix: fail-closed Kill-Quelle präzisiert (PPPD_PID aus pppd/ip-up env, nicht aus Mapping).

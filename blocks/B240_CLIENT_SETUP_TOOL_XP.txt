@@ -2,11 +2,11 @@ xp-vpn-stack/blocks/B240_CLIENT_SETUP_TOOL_XP.txt
 ================================================================================
 BLOCK-ID: B240
 TITLE: Client Setup Tool (XP/Vista) - Automation Package
-VERSION: v1.0
-DATUM: 2026-01-06
+VERSION: v1.2
+DATUM: 2026-01-20
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B220
+REQUIRES: B060, B080, B150, B200, B210, B220, B250, B260, B270, docs/nft_service_ip_scopes.txt
 INFLUENCES: B310
 OWNER-INTENT: Käufer klickt 1x Setup -> fertig.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
@@ -14,7 +14,7 @@ OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 NOTES:
 - Setup-Tool ist Pflicht: es automatisiert XP/Vista VPN-Config, Registry-Fix, CA-Import und einen eindeutigen Connectivity-Test.
 - Kein Handbuch-Marathon: der User soll nicht in Windows-Dialogen Einstellungen suchen müssen.
-- Tool muss Prüfungen liefern (z.B. Tunnel up, DNS forced, Portal erreichbar) und dabei keine Secrets im Klartext loggen.
+- Tool muss Prüfungen liefern (Tunnel up, DNS enforced -> SERVICE_DNS 10.77.0.1, /diag erreichbar -> SERVICE_WEB 10.77.0.3, NTP erreichbar -> SERVICE_NTP 10.77.0.4) und dabei keine Secrets im Klartext loggen (PSK/Passwörter nie in Logs/GUI ausgeben).
 ================================================================================
 
 1) ZWECK
@@ -25,13 +25,15 @@ NOTES:
   - time sync (pre & post)
   - CA import windows store + MyPal NSS
   - optional keepalive redial + diagnose button
+- SoT Service-Targets (nicht frei editierbar im Tool):
+  - DNS: 10.77.0.1, WEB/Portal/diag: 10.77.0.3, NTP: 10.77.0.4 (Unbound 10.77.0.2 ist server-only)
 
 2) GRENZEN
 - Tool muss idempotent sein (mehrfach laufen ok).
 - Tool muss klar kommunizieren, wenn Adminrechte fehlen.
 
 3) ABHÄNGIGKEITEN
-- Requires: B080, B260, B250, B270
+- Requires: B060, B080, B150, B200, B210, B220, B250, B260, B270, docs/nft_service_ip_scopes.txt
 
 4) INPUTS
 - Server FQDN
@@ -39,9 +41,10 @@ NOTES:
 - Sub-account username/password per device
 - CA cert files
 - NSS bundle (certutil + dlls)
+- Expected Service Targets (read-only): DNS 10.77.0.1, WEB/diag 10.77.0.3, NTP 10.77.0.4
 
 5) OUTPUTS
-- Functional VPN connection with minimal user interaction.
+- Functional VPN connection with minimal user interaction + Connectivity-Report (grün/rot) für Tunnel/DNS(/53 tcp+udp)/WEB(/diag)/NTP, ohne Secrets.
 
 6) MUST
 - Sets NAT-T registry key + reboot notice
@@ -55,14 +58,19 @@ NOTES:
 - Redial loop script for unstable Wi-Fi users.
 
 8) FEHLERBILDER
-- Setup fails due to missing admin -> show message.
-- MyPal import fails -> show manual fallback instructions.
+- Setup fails due to missing admin -> show message (inkl. Hinweis: Registry-Fix/Cert-Import brauchen Admin; ohne Admin keine Teilinstallation „halb fertig“).
+- MyPal import fails -> show manual fallback instructions; /diag Test kann trotzdem HTTP/HTTPS Reachability zu SERVICE_WEB 10.77.0.3 prüfen (Warnung erwartbar, falls NSS Trust fehlt).
 
 9) TESTS
-- Clean XP VM run -> setup success -> connect works.
+- Clean XP VM run -> setup success -> connect works -> Validierung: /diag erreichbar auf SERVICE_WEB 10.77.0.3, DNS enforced zu 10.77.0.1 (udp+tcp 53), NTP reachable 10.77.0.4; Negativ: 10.77.0.2:53 (Unbound) nicht erreichbar als Client.
+- Test muss DNS Enforcement validieren (tcp+udp 53): Erwartung Resolver = SERVICE_DNS 10.77.0.1 (auch wenn im Client 8.8.8.8 eingetragen ist -> DNAT via B210).
+- Test muss NTP Target validieren: Erwartung NTP = SERVICE_NTP 10.77.0.4:123/udp (B260).
+- Negative Expectation: Tool darf SERVICE_RESOLVER 10.77.0.2:53 nie als Client-Resolver konfigurieren; optionaler Negativtest dokumentiert, dass 10.77.0.2:53 für Clients nicht erreichbar sein muss (server-only).
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.2 (2026-01-20): Terminologie-Fix: SERVICE_UNBOUND → SERVICE_RESOLVER (10.77.0.2 bleibt server-only; Client darf nie dorthin zeigen).
+- v1.1 (2026-01-20): Setup-Tool Normpunkte auf SERVICE_* SoT gehoben (DNS=10.77.0.1, WEB/diag=10.77.0.3, NTP=10.77.0.4; Unbound 10.77.0.2 server-only); REQUIRES/Dependencies konsistent zu B060/B150/B200/B210/B220/B250/B260/B270 + docs/nft_service_ip_scopes.txt; MUST/TESTS um DNS-Enforcement (tcp+udp 53), NTP, /diag und Unbound-Negativ-Erwartung ergänzt; NOTES/Outputs ohne Secrets präzisiert.
 - v1.0: Initial
 ================================================================================

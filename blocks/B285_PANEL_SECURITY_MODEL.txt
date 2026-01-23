@@ -2,11 +2,11 @@ xp-vpn-stack/blocks/B285_PANEL_SECURITY_MODEL.txt
 ================================================================================
 BLOCK-ID: B285
 TITLE: Panel Security Model (AuthN/AuthZ/CSRF/RateLimit/Audit/Scopes)
-VERSION: v1.8
-DATUM: 2026-01-14
+VERSION: v1.12
+DATUM: 2026-01-20
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B050, B220, B270, B280
+REQUIRES: B050, B060, B150, B200, B220, B270, B280, docs/nft_service_ip_scopes.txt
 INFLUENCES: B150, B166, B310, B330
 OWNER-INTENT: Panel ist die Zentrale. Zugriff muss sicher, deterministisch und XP-tauglich sein – ohne WAN-Exposure, mit klaren Scopes, RateLimits und Audit.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
@@ -36,8 +36,11 @@ NOTES:
 3) ABHÄNGIGKEITEN
 - Requires:
   - B050 (SQL als Source of Truth; Status/Flags/Restricted)
-  - B220 (Webstack intern; Service-Bindings; DB lokal)
-  - B270 (siehe B270; wird von diesem Block vorausgesetzt)
+  - B060 (IP-Plan/Netzmodell SoT: Service/User/Admin Netze)
+  - B150 (Restricted Mode: Panel-Minimum muss erreichbar bleiben)
+  - B200 (vpn.status / DNS-Rewrite + Service Targets)
+  - B220 (Webstack intern; SERVICE_WEB Bindings; DB lokal)
+  - B270 (/diag; Support-Endpoint wird vorausgesetzt)
   - B280 (Panel Features/Flows: Allowlist Login, Verify-Wall, Claim)
   - docs/nft_service_ip_scopes.txt (Input-Scopes: wer darf welche Ports/Paths erreichen)
 - Influences:
@@ -50,12 +53,14 @@ NOTES:
 - VPN-IP des Requests (Quelle) = entscheidend für:
   - Panel Login Allowlist (IP-bound Login)
   - Session-Binding an VPN-IP
-  - Admin-Scope (Admin-Netz 10.77.20.0/24)
+  - Admin-Scope (ADMIN_VPN_NET 10.77.2.0/24)
 - Customer-Status aus SQL:
   - PENDING (email_verified_at NULL) / ACTIVE (email_verified_at gesetzt) / DISABLED/BANNED (falls vorhanden)
 - Connection-Status/Flags aus SQL:
   - restricted_effective (Quota/Expiry/Manual/UNCLAIMED_OVERDUE)
-  - fixed_ip pro Connection
+ - fixed_ip pro Connection (PFLICHT, nicht optional; SoT: ip_slot → fixed_ip)
+  - fixed_ipv6 pro Connection (PFLICHT für MODERN/ADMIN; für LEGACY NULL wegen v6_addr_policy=NONE; SoT: ip_slot → fixed_ipv6)
+  - conn_group (LEGACY/MODERN/ADMIN; SQL-first in vpn_connections, siehe B055/Glossar; dient Scope/UX/Diag-Konsistenz)
 - claim_token (App-Layer) und Verify-Code (email_verify_code, App-Layer)
 - Verify-Code Security-Contract (MUST):
   - Zustellung: per E-Mail; Benutzer kann Code auf anderem Gerät abrufen und im Panel eingeben.
@@ -76,14 +81,19 @@ NOTES:
 6) HARTE REGELN (MUST)
 
 6.1 Netzwerk-Scope / Erreichbarkeit (Defense in Depth)
-- Panel ist ausschließlich über VPN erreichbar (Service-IP 10.77.0.1 und/oder interne Domain vpn.status).
+- Panel ist ausschließlich über VPN erreichbar (SERVICE_WEB 10.77.0.3 und/oder interne Domain vpn.status).
 - WAN darf keine Panel-Endpunkte exponieren (auch nicht „versehentlich“).
 - Input-Scopes sind verbindlich:
-  - User-Netz: 10.77.10.0/24
-  - Admin-Netz: 10.77.20.0/24
-  - Restricted: darf Panel-Minimum erreichen (siehe 6.6)
+  - User-Netz (USER = LEGACY + MODERN):
+    - LEGACY_VPN_NET_v4: 10.77.16.0/20
+    - MODERN_VPN_NET_v4: 10.77.32.0/20
+    - (MODERN_VPN_NET_v6: fd77:0:0:32::/64, soweit Panel v6 intern genutzt wird)
+  - Admin-Netz:
+    - ADMIN_VPN_NET_v4: 10.77.2.0/24
+    - (ADMIN_VPN_NET_v6: fd77:0:0:2::/64, soweit Panel v6 intern genutzt wird)
+  - Restricted: saddr ∈ restricted_* Sets; darf Panel-Minimum erreichen (siehe 6.6)
 - Admin-only Dienste müssen zusätzlich scoped sein (mindestens Source-IP-basiert; idealerweise plus App-AuthZ):
-  - Admin-Funktionen: nur aus 10.77.20.0/24 erreichbar (Netz-Scope).
+  - Admin-Funktionen: nur aus 10.77.2.0/24 erreichbar (Netz-Scope; zusätzlich App-AuthZ; Scopes gemäß docs/nft_service_ip_scopes.txt).
   - Selbst wenn ein User eine URL errät, muss es am Netz-Scope und an AuthZ scheitern.
 
 6.2 AuthN (Login, Passwörter, Sessions)
@@ -91,6 +101,7 @@ NOTES:
 - Login-Identifier (SoT): Panel-Login erfolgt ausschließlich über customers.email (E-Mail bleibt SoT).
 - display_name ist UI-only (max 40) und darf AuthN/AuthZ/Policy niemals beeinflussen; Ausgabe im UI ist escaped (XSS-Schutz).
 - subaccount_login ist die VPN-AAA-Identität (PPP/RADIUS Username), system-generated/non-enumerable; im Panel nur read-only sichtbar und niemals als Panel-Login zu verwenden.
+- Terminologie-Kanon (Ref-only, Drift-Guard): VPN-AAA-Identität heißt connection_login (KANON) == subaccount_login (DB-Feld) == PPP Username (Glossar).
 - Passwörter:
   - Speicherung nur gehasht (PHP password_hash), bevorzugt Argon2id; falls nicht verfügbar: bcrypt.
   - Keine Klartextpasswörter in Logs, niemals.
@@ -115,8 +126,8 @@ NOTES:
 
 6.3 IP-bound Login (Allowlist) – zwingend
 - Login ist nur erlaubt, wenn die Request-VPN-IP im Customer-Allowlist-Modus gültig ist:
-  - Mode ALL: alle dem Customer zugeordneten fixed_ip dürfen login
-  - Mode SELECT: nur explizit freigeschaltete Connections (Checkbox pro Connection)
+ - Mode ALL: alle dem Customer zugeordneten Connection-IPs dürfen login (Dualstack: fixed_ip und – falls vorhanden – fixed_ipv6)
+  - Mode SELECT: nur explizit freigeschaltete Connections (Checkbox pro Connection; Dualstack: die Connection zählt als Einheit, IPv4/IPv6 sind gleichwertige Adressen derselben Connection)
 - Diese Prüfung passiert:
   - vor Session-Erstellung
   - und zusätzlich als „Guard“ bei jeder Request (Session-Binding + Allowlist Recheck optional, siehe 7).
@@ -139,7 +150,9 @@ NOTES:
 - Claim Token darf nur im eingeloggten Zustand genutzt werden.
 - Claim ist nur erlaubt, wenn Customer ACTIVE (email_verified_at gesetzt).
 - First-Claim ist IP-bound:
-  - Request VPN-IP == fixed_ip der Ziel-Connection
+- Dualstack-IP-Binding:
+    - Wenn Request VPN-IP eine IPv4 ist: Request VPN-IP == fixed_ip der Ziel-Connection
+    - Wenn Request VPN-IP eine IPv6 ist: Request VPN-IP == fixed_ipv6 der Ziel-Connection
 - Weitere Claims:
   - dürfen aus einer bereits login-berechtigten Customer-Connection erfolgen (Request VPN-IP ∈ Allowlist)
 - claim_token Speicherung:
@@ -283,7 +296,7 @@ E) Admin-sensible Aktionen (optional strenger):
 - Login geht, aber Panel zeigt nur Verify-Wall:
   - Ursache: Customer ist PENDING → Fix: Verify-Code korrekt eingeben / Resend / Support.
 - Admin sieht /admin nicht:
-  - Ursache: nicht aus Admin-Netz 10.77.20.0/24 → Fix: über Admin-Connection einloggen.
+  - Ursache: nicht aus Admin-Netz 10.77.2.0/24 → Fix: über Admin-Connection einloggen.
 - CSRF-Fehler:
     - Ursache: csrf_token fehlt/abgelaufen/Session invalid → Fix: neu laden, ggf. relogin.
 - Claim-Token-Bruteforce/Spam:
@@ -299,7 +312,7 @@ E) Admin-sensible Aktionen (optional strenger):
   - PENDING user: Login ok -> nur Verify-Wall erreichbar; Innenleben blockiert.
   - Verify success -> Innenleben sichtbar.
 - Admin Scope Test:
-  - Admin von 10.77.20.0/24 -> /admin erreichbar (nach AuthN)
+  - Admin von 10.77.2.0/24 -> /admin erreichbar (nach AuthN)
   - User-Netz -> /admin netzseitig blockiert und/oder AuthZ denies
 - Session Binding Test:
   - Cookie von anderer VPN-IP -> Session invalid
@@ -324,6 +337,10 @@ E) Admin-sensible Aktionen (optional strenger):
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.12 (2026-01-20): K2 Ref-only: conn_group als SQL-Input ergänzt; Terminologie-Drift-Guard connection_login==subaccount_login==PPP Username ergänzt.
+- v1.11 (2026-01-20): SoT=002/003: MODERN_VPN_NET_v6 Referenz auf fd77:0:0:32::/64 angehoben (statt ::3) in den Panel-Input-Scopes.
+- v1.10 (2026-01-20): K1-Konsistenz: Panel Input-Scopes von „User-Netz 10.77.10.0/24“ auf USER=(LEGACY 10.77.16.0/20 + MODERN 10.77.32.0/20) angehoben; Admin bleibt 10.77.2.0/24; v6 ULA Prefixe für ADMIN/MODERN als optionaler Panel-Transport konsistent referenziert.
+- v1.9 (2026-01-20): Service-/Netz-SoT konsolidiert: Panel/Scopes auf SERVICE_WEB 10.77.0.3 und ADMIN_VPN_NET 10.77.2.0/24 gehoben (statt 10.77.0.1 bzw. 10.77.20.0/24); Header-REQUIRES und Abschnitt 3 Requires auf B060/B150/B200 + docs/nft_service_ip_scopes.txt erweitert, um Scope-Enforcement und vpn.status Targets kanonisch abzubilden.
 - v1.8 (2026-01-14): Konsistenz-Fix: Header/Abhängigkeiten harmonisiert (REQUIRES/INFLUENCES ↔ Abschnitt 3); Verify-Code Contract präzisiert (verify_code_hash/verify_code_expires_at); RateLimit-DEFAULT-Policy klar als SQL-first Defaults (keine PHP-Hardcodes) markiert.
 - v1.7 (2026-01-14): Terminologie-Fix: RateLimit-Header präzisiert: „pro claim_token + pro Customer“ statt „pro Token“.
 - v1.6 (2026-01-14): Terminologie/Format fix: claim_token in 4/6.5 konsistent (kein unqualifiziertes „Token“, Bullet-Format repariert); CSRF-Pattern nutzt csrf_token statt „Token“.

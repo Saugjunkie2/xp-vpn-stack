@@ -1,0 +1,47 @@
+Fakten (Basis / was heute festgezurrt wurde)
+F1) Exposure-by-Binding ist das Primärmodell (WireGuard-Prinzip)
+  - WAN-“Closed” wird nicht primär durch „Default DROP auf INPUT“ erreicht, sondern dadurch, dass Dienste nicht an WAN/Public-IP/0.0.0.0/:: binden.
+  - Exponiert ist nur, was absichtlich auf WAN bindet (VPN-Endpunkte).
+  - nftables/WAN-Stealth (DROP/FILTERED) ist optional als Zusatzschutz, aber nicht Voraussetzung für das Modell.
+
+F2) Server-Sphäre vs Client-Bubble sind explizit getrennte Policy-Domänen
+  - Server-Sphäre: INPUT/OUTPUT (Host selbst, Dienste, lokale Prozesse).
+  - Client-Bubble: FORWARD + NAT (PREROUTING/POSTROUTING) + (bei IPsec/IKEv2) XFRM-Pfade für Client-Traffic.
+  - “Default-Deny” ist als Doktrin primär auf die Client-Bubble bezogen (Policies für VPN-Clients), nicht als pauschaler “Host-Drop”.
+
+F3) WAN-Minimal-Exposure: dauerhaft nur VPN-Endpunkte
+  - Von außen dauerhaft erreichbar sind nur die VPN-Endpunkte (im IPsec-Kontext: UDP 500/4500 + ESP; analog bei WG: WG-UDP-Port).
+  - Alles andere ist nicht OPEN (CLOSED oder FILTERED sind beide ok, aber nicht OPEN).
+  - Admin-/Panel-/DB-/SSH-Services müssen niemals über WAN exposure haben (Binding-Regel).
+
+F4) Hybrid Gate-0 ist verbindlich
+  - LEGACY bleibt unverändert: Gate-0 = PSK (IKEv1/L2TP-Kontext) + danach User/Pass wie gehabt.
+  - ADMIN/MODERN (IKEv2): Gate-0 = Server-Zertifikat/Trust (Public CA; bei euch konkret: Let’s Encrypt), kein PSK.
+  - Das ist nur Gate-0; es ersetzt keine Identität.
+
+F5) Kein Client-Zertifikat
+  - Für ADMIN/MODERN gibt es kein Client-CA- oder Client-Zertifikat-Modell.
+  - Der Client validiert ausschließlich Server-Zertifikat + Hostname/FQDN + Trust-Chain (Public CA Trust Store) oder optional Pinning (falls jemals entschieden, heute nicht).
+
+F6) Gate-1 bleibt unverändert: Username/Password ist weiterhin Pflicht
+  - Unabhängig vom Gate-0 gilt: Gate-1 = connection_login (Username/Password) via EAP/RADIUS (SQL-first).
+  - Ergebnis:
+        • Gate-0 fail → kein Tunnel (fail-closed).
+        • Gate-0 ok, Gate-1 fail → keine Policy/kein Internet (fail-closed).
+        • Gate-0 ok, Gate-1 ok → Policy deterministisch aus SQL.
+
+F7) DoD/Validierung ist konkret: “nicht OPEN” + Gate-0/Gate-1 Trennung
+  - WAN-Scan: nur VPN-Endpunkte dürfen OPEN sein; alles andere CLOSED/FILTERED ok, aber nicht OPEN.
+  - IKEv2 (ADMIN/MODERN) Tests müssen PSK-Tests ersetzen durch Zertifikat/Trust-Tests:
+        • Untrusted/invalid/expired Server-Cert → Gate-0 FAIL
+        • Trusted Server-Cert + falsches Passwort → Gate-1 FAIL
+        • Trusted Server-Cert + korrektes Passwort → OK + Policy Apply
+
+F8) Let’s Encrypt ist als konkrete Gate-0-CA-Wahl gesetzt
+  - “Server-CA” meint hier praktisch: Public CA Chain (Let’s Encrypt) für das Server-Zertifikat.
+  - Client vertraut dem Server über den normalen CA-Trust, nicht über eine private Client-CA.
+
+F9) Cert-Renewal darf das Exposure-Modell nicht dauerhaft aufweichen
+  - Erneuerung ist Pflicht (kurzlebige Public-CA Zertifikate).
+  - Egal welches Challenge-Verfahren genutzt wird: Das System darf nicht dauerhaft zusätzliche WAN-Ports offen halten, nur weil Renewal existiert.
+  - (Konkretes Challenge-Verfahren/Port-Strategie ist ein eigenes Ops-Thema; heute ist nur der Grundsatz festgezurrt.)

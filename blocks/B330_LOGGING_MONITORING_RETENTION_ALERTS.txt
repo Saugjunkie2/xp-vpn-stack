@@ -2,11 +2,11 @@ xp-vpn-stack/blocks/B330_LOGGING_MONITORING_RETENTION_ALERTS.txt
 ================================================================================
 BLOCK-ID: B330
 TITLE: Logging / Monitoring / Retention / Alerts (Heavy User Detection)
-VERSION: v1.6
-DATUM: 2026-01-14
+VERSION: v1.7
+DATUM: 2026-01-20
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B050, B150, B165, B166, B168, B169, B280, B285
+REQUIRES: B050, B060, B150, B165, B166, B168, B169, B200, B220, B280, B285, docs/nft_service_ip_scopes.txt
 INFLUENCES: B165, B166, B168, B169, B270, B280, B285, B320
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
@@ -14,6 +14,7 @@ NOTES:
 - Logs dürfen keine Secrets enthalten (Passwörter/PSKs/Tokens); Sanitizing ist Pflicht.
 - Disk-Full ist ein reales Risiko: Rotation/Retention/Alerts müssen verhindern, dass der Server sich selbst abschießt.
 - Monitoring muss „Heavy User“ und Anomalien erkennen, ohne den VPN-Datenpfad zu belasten (Batching, Sampling).
+- Admin-only bedeutet Scope-Enforcement: Zugriff auf Logs/Aggregates/Alerts nur aus ADMIN_VPN_NET 10.77.2.0/24 (zusätzlich App-AuthZ); Scopes sind kanonisch in docs/nft_service_ip_scopes.txt definiert.
 ================================================================================
 
 ================================================================================
@@ -128,7 +129,7 @@ D) Policy Failures (High Severity):
 ## 6) DATENSCHUTZ / PII (MUST)
 - Keine Domain-Logs, keine DNS-Target-Logs (nur Counters).
 - Panel Audit Trails enthalten minimale Identifikatoren (IDs), keine Klartext-Secrets.
-- Access zu Logs/Aggregates: Admin-only.
+- Access zu Logs/Aggregates: Admin-only = nur aus ADMIN_VPN_NET 10.77.2.0/24 (netzbasiert) + serverseitige AuthZ; niemals über User/Restricted Netze exponieren (siehe docs/nft_service_ip_scopes.txt).
 
 ## 7) TESTS / DoD (MUST)
 - Rotation/Retention Test: Logs rotieren deterministisch; Gesamtspeicher bleibt <= LOG_HARD_MAX_BYTES.
@@ -136,10 +137,12 @@ D) Policy Failures (High Severity):
 - Spool Alert Test: DB down -> spool wächst -> ceiling hit -> drop oldest + alert (component="spool", current_spool_bytes, oldest_age_seconds, ceiling_bytes/ceiling_age_seconds).
 - DNS Counters Test (wenn aktiviert): Counter steigen bei DNS Traffic, ohne dass target logs entstehen.
 - Hard-Cut Failure Test: conntrack flush fail + PPP-kill fail -> FATAL Alert.
+- Log/Monitoring Access Scope Test: Nachweis, dass Log-/Alert-Views/Exports ausschließlich aus ADMIN_VPN_NET 10.77.2.0/24 erreichbar sind; aus USER_VPN_NET/Restricted ist der Zugriff zuverlässig verweigert (nicht nur UI-Hiding, sondern echte Enforcement-Punkte gemäß docs/nft_service_ip_scopes.txt).
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.7 (2026-01-20): Scope-SoT für Admin-only verankert: Zugriff auf Logs/Aggregates/Alerts nur aus ADMIN_VPN_NET 10.77.2.0/24 (zusätzlich AuthZ) gemäß docs/nft_service_ip_scopes.txt; Header-REQUIRES um B060/B200/B220 + Scope-Doc erweitert; DoD um Scope-Enforcement-Test ergänzt.
 - v1.6 (2026-01-14): Konsistenz-Fix: Abschnitt 3 (Retention/Rotation) nutzt nun durchgehend die kanonischen SQL-first Settings-Keys (log_* / spool_*). Unpräfixierte „Pseudo-Keys“ entfernt. Keine Policy-Änderung (Ceilings bleiben lokal).
 - v1.5 (2026-01-14): 3.2 SQL-first SoT: Platzhalter-REQUIRES entfernt und kanonische SQL-Settings-Key-Namen ergänzt (Retention/Limits + Settings-Load). Keine Änderung am Ceiling-Prinzip (Hard Ceilings bleiben lokal).
 - v1.4 (2026-01-10): Terminologie-Fix/DoD: Ring-Buffer Test (Logs) nutzt konsistent current_log_bytes (statt current_total_bytes) passend zu Ceiling-Hit Alert Feldern. (Keine Policy-Änderung.)

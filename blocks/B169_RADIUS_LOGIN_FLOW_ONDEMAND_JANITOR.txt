@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B169_RADIUS_LOGIN_FLOW_ONDEMAND_JANITOR.txt
 ================================================================================
 BLOCK-ID: B169
 TITLE: RADIUS Login Flow – On-Demand Janitor Hook
-VERSION: v1.9
-DATUM: 2026-01-14
+VERSION: v1.11
+DATUM: 2026-01-23
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B050, B055, B056, B168, D012
@@ -108,30 +108,24 @@ STRICT (Simultaneous-Use):
 ================================================================================
 - On-Demand Cleanup darf nicht zu einem DoS-Vektor oder DB-Lasttreiber werden.
 
-Parameter (SQL-first + lokale Safety Caps, KANONISCH):
+Parameter (SQL-first Settings gemäß B057, KANONISCH):
 
 - CLEANUP_RATELIMIT_WINDOW_SECONDS:
   - SOLL aus SQL-Settings geladen werden (SQL-first).
-  - Hard Cap (MUST): <= 30s
-  - Notfall-Fallback (klar markiert): default = 10s
+  - Failsafe + Hardcap-Contract: gemäß B057 (cleanup_ratelimit_window_seconds; Fail-Class/Hardcap/Failsafe sind dort kanonisch, keine lokalen Literale)
 
 - CLEANUP_RESULT_TTL_SECONDS:
   - SOLL aus SQL-Settings geladen werden (SQL-first).
-  - Hard Cap (MUST): <= 120s
-  - Notfall-Fallback (klar markiert): default = 30s
+  - Failsafe + Hardcap-Contract: gemäß B057 (cleanup_result_ttl_seconds; Fail-Class/Hardcap/Failsafe sind dort kanonisch, keine lokalen Literale)
 
 - CLEANUP_TIMEOUT_SECONDS:
   - SOLL aus SQL-Settings geladen werden (SQL-first).
-  - Hard Cap (MUST): <= 2s
-  - Notfall-Fallback (klar markiert): default = 1s
+  - Failsafe + Hardcap-Contract: gemäß B057 (cleanup_timeout_seconds; Fail-Class/Hardcap/Failsafe sind dort kanonisch, keine lokalen Literale)
 
 SQL-FIRST SETTINGS: KEY-NAMEN / MAPPING (KANONISCH, MUST)
-- CLEANUP_RATELIMIT_WINDOW_SECONDS => cleanup_ratelimit_window_seconds
-  - Notfall-Fallback: 10s, Hard Cap <= 30s (lokal, MUST)
-- CLEANUP_RESULT_TTL_SECONDS => cleanup_result_ttl_seconds
-  - Notfall-Fallback: 30s, Hard Cap <= 120s (lokal, MUST)
-- CLEANUP_TIMEOUT_SECONDS => cleanup_timeout_seconds
-  - Notfall-Fallback: 1s, Hard Cap <= 2s (lokal, MUST)
+- CLEANUP_RATELIMIT_WINDOW_SECONDS => cleanup_ratelimit_window_seconds (B057, ohne lokale Zahlen)
+- CLEANUP_RESULT_TTL_SECONDS => cleanup_result_ttl_seconds (B057, ohne lokale Zahlen)
+- CLEANUP_TIMEOUT_SECONDS => cleanup_timeout_seconds (B057, ohne lokale Zahlen)
 
 Hinweis (Ops/Performance, MUST):
 - SQL-Settings dürfen im RADIUS authorize-flow NICHT pro Request „live“ aus der DB geladen werden (DoS-Vektor).
@@ -160,11 +154,12 @@ Regeln (KANONISCH, D012):
 - On-Demand Cleanup bleibt "pre-check" BEST EFFORT (wie oben).
 - Truth für "blocked" bleibt radacct stop_time IS NULL (KANONISCH).
 - active_session_locks ist NUR Mutex/Guard (keine PENDING/ACTIVE State-Machine):
-  - authorize: Lock anlegen (state='held', expires_at=NOW()+20s) sobald vpn_connection_id bekannt ist.
+  - authorize: Lock anlegen (state='held', expires_at=NOW()+active_session_lock_ttl_seconds) sobald vpn_connection_id bekannt ist.
   - wenn Lock nicht erlangt werden kann (UNIQUE hit): sofort REJECT/TEMPFAIL gemäß Policy (Parallel-Login wird abgewehrt).
   - wenn final REJECT (z.B. weiterhin "blocked") -> BEST EFFORT lock löschen (keine Lock-Leichen).
-  - accounting-start: lock wird sofort gelöscht (DELETE) -> Guard ist beendet.
-  - TTL: falls Acct-Start nie kommt, läuft Lock nach 20s aus und wird (spätestens) durch Janitor bereinigt.
+- active_session_locks ist NUR Mutex/Guard (keine PENDING/ACTIVE State-Machine):
+  - authorize: Lock anlegen (state='held', expires_at=NOW()..._session_lock_ttl_seconds) sobald vpn_connection_id bekannt ist.
+  - TTL: falls Acct-Start nie kommt, läuft Lock nach active_session_lock_ttl_seconds (gemäß B057; inkl. failsafe/validierung dort) ab und wird durch Janitor bereinigt.
 - No Takeover (Fail-Closed, D012):
   - Wenn radacct offen bleibt (auch nach On-Demand Cleanup), wird REJECTed.
   - Kein "conditional takeover" im authorize-flow.
@@ -212,6 +207,8 @@ Runtime-Hinweis (nur Validierung, nicht Truth):
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.11 (2026-01-23): Entfernt lokale Default/Hardcap-Nennungen für cleanup_* und Lock-TTL; Referenzrichtung jetzt strikt gemäß B057 (SQL-first SoT).
+- v1.10 (2026-01-23): SQL-first SoT-Schärfung: lokale Zahlen für Cleanup-Fallback/Hardcap durch Verweis auf B057 ersetzt; Lock-TTL als active_session_lock_ttl_seconds referenziert.
 - v1.9 (2026-01-14): Konsistenz/Format: Header-DATUM aktualisiert; REQUIRES um B055/B056/D012 ergänzt (6.5 nutzt diese Quellen); NOTES Terminologie „vpn_connection_id“ statt „connection_id“; 6.5-Section-Header auf Block-Standard (Separator vor Titel) harmonisiert. Keine Logikänderung.
 - v1.8 (2026-01-14): 3.2 SQL-first SoT: Kanonische SQL-Settings-Key-Namen/Mappings für CLEANUP_* Parameter ergänzt (cleanup_ratelimit_window_seconds, cleanup_result_ttl_seconds, cleanup_timeout_seconds). Keine Logikänderung, nur Referenzierbarkeit.
 - v1.7 (2026-01-14): Session-Control gemäß D012 finalisiert: active_session_locks nur Mutex/Guard (kein PENDING/ACTIVE), TTL=20s, Release auf Accounting-Start (DELETE), No Takeover (Fail-Closed).

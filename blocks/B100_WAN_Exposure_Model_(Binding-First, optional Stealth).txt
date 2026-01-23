@@ -1,0 +1,62 @@
+xp-vpn-stack/blocks/B100_WAN_Exposure_Model_(Binding-First, optional Stealth).txt
+================================================================================
+BLOCK-ID: B100
+TITLE: WAN Exposure Model (Binding-First, optional Stealth)
+VERSION: v1.3
+DATUM: 2026-01-23
+STATUS: ACTIVE
+PRIORITY: MUST
+REQUIRES: B060
+INFLUENCES: alle
+OWNER-INTENT: Von außen nur VPN sichtbar.
+OWNER: Marco (Owner) + ChatGPT (Co-Architect)
+
+NOTES:
+- WAN-Exposure ist minimal „Binding-First“: von WAN aus antworten nur die VPN-Endpunkte (UDP 500/4500 + ESP), weil nur diese Dienste auf WAN-IP/0.0.0.0/:: binden. Firewall-Stealth (DROP/Filter inkl. ICMP-Policy) ist optionaler Zusatzschutz, nicht die primäre Methode.
+- SSH/Panel/DB dürfen niemals auf WAN lauschen oder durchgelassen werden.
+- nftables-Regeln müssen stateful + rate-limited sein, um Scan/Bruteforce Noise zu minimieren (Logging sparsam).
+================================================================================
+
+1) ZWECK
+- Minimiert Angriffsfläche: WAN zeigt nur IPsec.
+
+2) GRENZEN
+- Kein SSH auf WAN.
+- Kein Web auf WAN.
+
+3) ABHÄNGIGKEITEN
+- Requires: B060
+- Influences: B110, B120
+
+4) INPUTS (WAN-Exposure)
+- Primärmodell = Exposure-by-Binding: Dienste binden nicht an WAN/Public-IP/0.0.0.0/::, außer die VPN-Endpunkte.
+- Optionaler Zusatzschutz (WAN-Stealth): Scope nur WAN-Interface ens13 → allow UDP 500/4500 + ESP, allow established/related; DROP sonst (FILTERED).
+- Wichtig: Egal ob Stealth aktiv ist oder nicht – “OPEN” entsteht nur, wenn ein Dienst absichtlich auf WAN bindet.
+
+5) OUTPUTS
+- Default policy: accept (Host-Outbound ist nicht das Exposure-Modell).
+- Client-Outbound wird in der Client-Bubble per FORWARD/NAT/Policy erzwungen (nicht hier).
+
+6) MUST (Invarianten)
+- VPN-Endpunkte bleiben die einzigen dauerhaft gewollten WAN-Listener.
+- Stealth/DROP auf WAN ist optional, aber wenn aktiviert: strikt nur auf ens13 scoped und darf VPN-Inputs (ppp*/xfrm) nicht beeinflussen.
+- Regelmäßiger Listener-Audit (IPv4+IPv6) ist Pflicht: “ok” = nur VPN-Endpunkte auf 0.0.0.0/::, alles andere nur intern gebunden.
+
+7) OPTIONEN
+- Rate-limit log for scans.
+
+8) FEHLERBILDER
+- Wenn Port 22 sichtbar -> ssh bind/fwrule falsch.
+
+9) TESTS
+- nmap von außen: nur VPN-Endpunkte (UDP 500/4500 + ESP) sind OPEN/erreichbar. Andere Ports sind CLOSED oder FILTERED (beides ok), aber nicht OPEN.
+- nmap -6 von außen: gleiche Erwartung für IPv6 (Dualstack).
+
+================================================================================
+CHANGELOG
+================================================================================
+- v1.3 (2026-01-23): Modellpräzisierung: WAN-Minimal-Exposure ist Binding-First (Exposure-by-Binding); nftables Stealth/DROP ist optionaler Zusatzschutz; Tests auf „nicht OPEN“ erweitert (CLOSED/FILTERED ok).
+- v1.2 (2026-01-14): Konsistenz: Header-DATUM aktualisiert; Changelog-Datierung standardisiert. Keine Regeländerung.
+- v1.1: Scope-Präzisierung: WAN-Stealth-Regeln gelten strikt nur auf iifname "ens13" und dürfen VPN-Input (ppp*) nicht beeinflussen.
+- v1.0: Initial
+================================================================================

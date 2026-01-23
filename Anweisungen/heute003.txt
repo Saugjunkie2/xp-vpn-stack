@@ -1,0 +1,33 @@
+Fakten (Basis / was heute festgezurrt wurde)
+
+F1) Lock-TTL ist ab sofort strikt SQL-first (SoT = B057), keine lokalen Zahlen mehr
+  - active_session_lock_ttl_seconds ist der einzige kanonische Parameter für den Mutex/Lock-TTL.
+  - Failsafe für diesen Lock-TTL ist kanonisch in B057 verankert (kein „20s“ mehr als lokale Aussage in Flows/Schema/Testtext).
+  - Andere Blöcke dürfen TTL nur noch als „gemäß B057“ referenzieren.
+
+F2) „20s“-Literale (und ähnliche Fixzahlen) sind in allen konsumierenden Blöcken zu entfernen
+  - B056/B169/B171/B310 dürfen keine Formulierungen wie „TTL=20s“, „läuft nach 20s ab“, „NOW()+20s“ enthalten.
+  - Stattdessen: expires_at/TTL referenziert active_session_lock_ttl_seconds (B057) + (wo nötig) Hinweis „Failsafe gemäß B057“.
+  - Ziel: Keine versteckte Policy in Text/Flow/Schema; Policy liegt nur in B057.
+
+F3) B057 Norm 13.2 ist verbindlich: FAIL_SAFE_HARDCAP ⇒ failsafe muss explizit existieren
+  - Jeder Key mit fail_class=FAIL_SAFE_HARDCAP muss einen expliziten failsafe-Wert tragen (sonst formaler Kanon-Bruch).
+  - Konkrete Today-Fix-Entscheidung (für PH1-Kanon-Closure):
+    • tail_reserve_slots: failsafe=0
+    • online_window_seconds: failsafe=300
+
+F4) Referenz-Richtung ist fest: Konsumenten entfernen lokale Defaults und verweisen auf B057
+  - B057 definiert: Key, Typ, Fail-Class, Failsafe, Override-Scope (allowed_override_scope).
+  - B056/B169/B171 (Flows/Schema) konsumieren nur noch („gemäß B057“), keine lokalen Default-/Hardcap-Definitionen.
+  - B310 (Tests) validiert Verhalten gegen Settings (B057) statt gegen Fixzahlen.
+
+F5) Testkatalog (B310) darf keine Fixzahl-Assertions für Lock-TTL enthalten
+  - „Lock TTL = 20s“, „~20s“, „~25s“ sind als Test-Orakel verboten.
+  - Tests müssen formuliert sein als: „Lock läuft nach Ablauf des TTL ab“ und TTL ist active_session_lock_ttl_seconds (B057).
+  - Dadurch bleiben Tests korrekt, auch wenn der TTL später (innerhalb B057-Constraints) geändert wird.
+
+F6) VERIFY-Regel für Timeout-/TTL-Drift (neuer Hygiene-Check)
+  - Es wird aktiv geprüft, ob irgendwo außerhalb von B057 Muster auftauchen wie:
+    • expires_at=NOW()+<Zahl>s
+    • TTL=<Zahl>s / „läuft nach <Zahl>s ab“
+  - Wenn solche Literale außerhalb von B057 existieren: sie gelten als Drift/Policy-Leak und müssen entfernt/auf B057 referenziert werden.

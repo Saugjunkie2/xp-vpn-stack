@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B050_SQL_AAA_RADIUS.txt
 ================================================================================
 BLOCK-ID: B050
 TITLE: SQL AAA / FreeRADIUS / Accounting
-VERSION: v1.20
-DATUM: 2026-01-14
+VERSION: v1.24
+DATUM: 2026-01-23
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B010, B020, B030, B040, B055, B056, B270
@@ -13,8 +13,14 @@ OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
 NOTES:
 - RADIUS/SQL ist die Autorität für Auth + Policy: keine lokalen chap-secrets als Produktions-Truth (nur evtl. Debug).
+- IKEv2 (ADMIN/MODERN): Gate-0 = Server-Zertifikat/Trust (Public CA Trust; konkret: Let’s Encrypt) + Gate-1 = Username/Password via EAP-MSCHAPv2 (SQL-first). Details/DoD/Ops: B059.
+- LEGACY bleibt unverändert: Gate-0 = PSK (IKEv1/L2TP-Kontext) + danach Username/Password wie gehabt.
 - Backend-Fehler (SQL down etc.) dürfen niemals Bans triggern; sie müssen als eigener Reason-Code sichtbar sein.
 - Accounting-Events sind Teil des Contracts (Quota/Janitor/F2B): Format und Felder dürfen nicht „still“ abweichen.
+REF-ONLY / SoT-MAP (K2):
+- Terminologie-SoT (Begriffe/Drift-Guards): 02_GLOSSAR.txt
+- DB-Feldnamen/Constraints: B055
+- B050 beschreibt AAA-Flow/Enforcement-Kontext. Wenn hier Begriffe/Constraints genannt werden, sind sie nur gültig, wenn sie zu 02_GLOSSAR/B055 deckungsgleich sind (keine stillen Abweichungen).
 ================================================================================
 
 1) ZWECK
@@ -40,7 +46,7 @@ NOTES:
 - Jede VPN-Verbindung = eigenes Login (Sub-Account)
 - Attribute pro Verbindung:
   - assigned IP
-  - group (user/admin)
+  - conn_group (LEGACY/MODERN/ADMIN, SQL-first in vpn_connections; nicht aus IP “erraten”)
   - speed profile
   - expiry date
   - quota/volumen (optional)
@@ -55,12 +61,18 @@ NOTES:
   - Start/Stop
   - Bytes in/out
   - Assigned IP
-  - Username (PPP Username == subaccount_login == Connection-Login)
+- Username (PPP Username == connection_login (KANON) == subaccount_login (DB-Feldname))
 
 6) HARTE REGELN (MUST)
 - Sub-Accounts pro Gerät zwingend (damit feste IPs eindeutig sind).
 - PPP Username (RADIUS User-Name) MUSS identisch sein mit vpn_connections.subaccount_login (Option 1).
 - subaccount_login MUSS eindeutig sein (UNIQUE) für aktive Verbindungen, damit ip-up die CONNECTION_ID deterministisch per SQL Lookup ermitteln kann (siehe B167).
+- Terminologie-Kanon (MUST, Drift-Guard):
+  - SoT-Referenz: 02_GLOSSAR.txt (Begriff/Benennung), B055 (DB-Feldname/Schema), B050 (AAA-Kontext + Drift-Guard)
+  - Kanonischer Begriff: connection_login
+  - DB-Feldname bleibt: subaccount_login
+  - PPP Username / RADIUS User-Name == connection_login == subaccount_login
+  - Synonyme ohne Definition sind verboten (kein “VPN-Login”, “Subaccount-User”, “Connection-Login” als wechselnde Begriffe).
 - subaccount_login Format ist kanonisch und MUSS validiert werden: ^vpn_[a-z2-7]{16}$ (Prefix "vpn_" + 16 Zeichen Base32 (a-z2-7), lowercase).
 - subaccount_login wird ausschließlich serverseitig random/non-enumerable generiert (niemals user-supplied; Anti-Enumeration). Panel darf den Wert anzeigen, aber nur read-only.
 - Keine Parallel-Sessions: Pro subaccount_login / vpn_connection_id (CONNECTION_ID) ist maximal 1 gleichzeitige PPP-Session erlaubt (pro Gerät genau 1 Verbindung).
@@ -75,6 +87,7 @@ NOTES:
 - Accounting ist Pflicht und muss persistent gespeichert werden.
 - DB liegt lokal auf derselben Maschine (Latenz/Failure minimieren).
 - "Restricted State" MUSS aus SQL deterministisch ableitbar sein (Single Source of Truth).
+- conn_group MUSS SQL-first als Feld an der Connection geführt werden (B055) und darf nicht implizit aus IP-Ranges “abgeleitet” werden.
 - Restricted wird NICHT über RADIUS reject umgesetzt (reject bleibt nur für DISABLED/BANNED/Missbrauch).
 - Restricted Quellen (effective):
   - Quota <= 0 (pro Connection) -> restricted
@@ -142,6 +155,10 @@ NOTES:
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.24 (2026-01-23): Drift-Fix: IKEv2 Gate-0 ist Server-Zertifikat/Trust (Let’s Encrypt), PSK bleibt nur Legacy; Gate-1 bleibt EAP/RADIUS (SQL-first).
+- v1.23 (2026-01-21): IKEv2 Credential/Gate-0 Ops-Contract Referenz ergänzt (B059) — keine Flow-Änderung, nur Kanon-Verlinkung.
+- v1.22 (2026-01-20): Ref-only-Hygiene ergänzt (SoT-Map nach NOTES) + Terminologie-Kanon mit expliziter SoT-Referenzzeile versehen (keine Semantikänderung).
+- v1.21 (2026-01-20): K2-Kanon: Terminologie-Drift-Guard connection_login==PPP Username==subaccount_login; conn_group als SQL-first Feld präzisiert.
 - v1.20 (2026-01-14): Konsistenz-Fix: Header-DATUM aktualisiert; REQUIRES/ABHÄNGIGKEITEN harmonisiert (inkl. B040/B055/B056/B270); Terminologie präzisiert (vpn_connection_id statt connection_id im Parallel-Session-Satz); restricted_reason Persistenz-Note an B055 angepasst (persistiert oder computed, aber stets deterministisch/server-managed).
 - v1.19 (2026-01-14): Kanonisches subaccount_login Format/Entropy (^vpn_[a-z2-7]{16}$) + system-generated/non-enumerable + Panel read-only Sichtbarkeit als MUST ergänzt.
 - v1.18 (2026-01-13): restricted_reason auf B342-canonical R_POLICY_* Token umgestellt (Mapping Quota/Expiry/Manual/UNCLAIMED_OVERDUE); explizit klargestellt: niemals R_PANEL_* im AAA/Kernel-Kontext.

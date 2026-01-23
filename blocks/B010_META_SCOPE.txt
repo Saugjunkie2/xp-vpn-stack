@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B010_META_SCOPE.txt
 ================================================================================
 BLOCK-ID: B010
 TITLE: META / Scope & Constraints
-VERSION: v1.0
-DATUM: 2026-01-06
+VERSION: v1.2
+DATUM: 2026-01-20
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: -
@@ -12,8 +12,10 @@ OWNER-INTENT: Rahmen setzen, damit alle folgenden Blöcke konsistent bleiben.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
 NOTES:
-- Gilt ausschließlich für den L2TP/IPsec-Stack (strongSwan + xl2tpd/pppd) für XP/Vista im Full-Tunnel.
-- Kein „Public Service“: Web/UI/SSH/DB sind niemals vom WAN erreichbar, nur via VPN (Service-IP/Admin-Netz).
+- SoT ist 001/002/003: Plattform ist conn_group-basiert (LEGACY/ADMIN/MODERN), nicht „nur L2TP“.
+- LEGACY: L2TP/IPsec (IKEv1) + xl2tpd/pppd für XP/Vista (Full-Tunnel).
+- ADMIN/MODERN: IKEv2 (strongSwan), Dualstack (IPv4+IPv6) gemäß Netzmodell (B060).
+- Kein „Public Service“: Web/UI/SSH/DB sind niemals vom WAN erreichbar, nur via VPN (SERVICE_NET + Admin-Scopes).
 - Bei Konflikt gilt: Dieser Meta-Scope-Block setzt die harte Leitplanke für alle Detailblöcke.
 ================================================================================
 
@@ -23,7 +25,7 @@ NOTES:
 
 2) GRENZEN
 - Kein WireGuard/SoftEther Bestandteil im finalen Konzept.
-- Keine IPv6 Unterstützung (bewusst deaktiviert).
+- IPv6 ist NICHT global „aus“: Dualstack ist Teil des SoT für ADMIN/MODERN; LEGACY bleibt IPv4-only.
 - Kein öffentliches Webpanel auf WAN.
 - Keine "User klicken sich durch Windows Dialoge" Lösung: Setup-Tool ist Pflicht.
 
@@ -39,7 +41,7 @@ NOTES:
 - Bindende Prinzipien:
   - SQL-first AAA
   - Full-Tunnel
-  - 2 Netze + Service-IP
+  - Zonenmodell gemäß B060: SERVICE_NET + LEGACY + ADMIN + MODERN (ADMIN/MODERN Dualstack).
   - User dürfen Panel/Blockpage, aber keine Admin-Services
   - Abuse-Blocking Pflicht
 
@@ -47,7 +49,7 @@ NOTES:
 - Jede VPN-Verbindung (pro Gerät) hat eigene Credentials (Sub-Account).
 - User-Netz ist peer-isoliert.
 - WAN minimal offen: UDP 500/4500 + ESP.
-- IPv6 deaktiviert.
+- IPv6 ist NICHT global deaktiviert: ADMIN/MODERN sind Dualstack gemäß B060; LEGACY bleibt IPv4-only. Leak-Control ist Pflicht (WAN-IPv6 deaktivieren ODER egress/forward so hart setzen, dass keine unbeabsichtigten IPv6-Leaks möglich sind).
 - Setup-Tool setzt NAT-T Fix + Truststore + Zeitlogik.
 
 7) OPTIONEN
@@ -62,5 +64,7 @@ NOTES:
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.2 (2026-01-20): Drift-Fix: MUST-Regel „IPv6 deaktiviert“ entfernt und durch konsistente Leak-Control-Regel ersetzt (Dualstack bleibt für ADMIN/MODERN Teil des SoT; LEGACY IPv4-only).
+- v1.1 (2026-01-20): Meta-Scope an 001/002/003-SoT angepasst: conn_group (LEGACY/ADMIN/MODERN), IKEv2 für ADMIN/MODERN, Dualstack nur dort; alte Aussagen „nur L2TP“/„IPv6 aus“ korrigiert.
 - v1.0: Initial
 ================================================================================

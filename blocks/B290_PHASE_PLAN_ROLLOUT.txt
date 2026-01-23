@@ -2,11 +2,11 @@ xp-vpn-stack/blocks/B290_PHASE_PLAN_ROLLOUT.txt
 ================================================================================
 BLOCK-ID: B290
 TITLE: Rollout / Phasenplan
-VERSION: v1.2
-DATUM: 2026-01-13
+VERSION: v1.5
+DATUM: 2026-01-23
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B020, B040, B050, B055, B056, B060, B070, B080, B090, B100, B110, B120, B130, B140, B150, B155, B160, B167, B170, B180, B190, B200, B210, B220, B230, B240, B250, B260, B270, B280, B285, B310, B320, B330, B340, B341, B342, B343
+REQUIRES: B020, B040, B050, B055, B056, B060, B070, B080, B090, B100–B140, B150, B155, B160, B165, B166, B167, B168, B169, B170, B180, B190, B200, B210, B220, B230, B240, B250, B260, B270, B280, B285, B310, B320, B330, B340–B343, B344
 INFLUENCES: B020, B310, B320, B330
 OWNER-INTENT: Reihenfolge, damit nichts instabil "oben drauf" kommt.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
@@ -34,61 +34,125 @@ PH1: VPN-Baseline (Tunnel + SQL-AAA + Firewall-Basis)
   - strongSwan + xl2tpd/pppd lauffähig (B040/B167/B170/B180)
   - SQL-first AAA (FreeRADIUS + SQL Schema/Mapping) (B050/B055/B056)
   - nftables Baseline: WAN nur UDP 500/4500 + ESP; UDP 1701 nur via IPsec/XFRM; NAT/Masquerade; Peer-Isolation (B100–B140)
+  - Doktrin: Exposure-by-Binding ist Primärmodell; Default-Deny bezieht sich auf die Client-Bubble (FORWARD/NAT/XFRM) und ist kein pauschaler Host-DROP.
   - XP NAT-T Fix/Legacy Crypto definiert (B070/B080)
+  - Session-Stabilität (DPD/LCP) + Reconnect ohne Ghost Sessions (B090/B170/B180)
+  - ADMIN/MODERN: IKEv2 ist Teil der VPN-Baseline und Dual-Stack-fähig (Inbound über IPv4 + IPv6; IPv6 ist gleichwertig)
+  - ADMIN/MODERN: IPv6 Egress funktioniert via NAT66/Masquerade (analog IPv4 MASQUERADE)
+  - fixed_ip ist nicht optional: Jede Verbindung/Subaccount hat feste fixed_ip + fixed_ipv6 (SoT: ip_slot → fixed_ip/fixed_ipv6), eindeutig zugeordnet und nicht änderbar
 - Acceptance (MUST):
   - XP/Vista Client kann verbinden, bekommt PPP-IP aus dem vorgesehenen Pool (B060)
   - Full-Tunnel funktioniert (Default-Route über VPN), keine User↔User Kommunikation (Peer-Isolation)
-  - Reconnect stabil (DPD/LCP-Echo), keine “Ghost Sessions” (B090/B180)
+  - Reconnect stabil (DPD/LCP-Echo), keine “Ghost Sessions”
+  - ADMIN/MODERN (IKEv2): Connect/Handshake funktioniert sowohl über IPv4 als auch über IPv6 (Dual-Stack Inbound)
+  - ADMIN/MODERN: Full-Tunnel + Baseline-Policies gelten identisch für IPv4 und IPv6 (keine Sonderbehandlung)
+  - ADMIN/MODERN: IPv6 Egress ist nachweisbar funktionsfähig (NAT66/Masquerade aktiv)
+  - fixed_ipv6 wird pro Verbindung deterministisch/konstant bereitgestellt (keine “wechselnden” v6 pro Reconnect)
 
 PH2: QoS / Bandbreitenkontrolle
 - Ziel: Pro pppX Limits und kontrollierbares Verhalten (User/Admin unterschiedlich).
+- Scope: PH2 bezieht sich auf Legacy/pppX (L2TP/PPP). QoS für IKEv2 (ADMIN/MODERN) ist nicht Teil von PH2.
 - MUST:
-  - tc/ip-up Hook Konzept und Umsetzungsvorgaben sind gültig (B190)
+  - tc pro pppX via ip-up Hook (B160)
+  - Admin/User Limits getrennt, Override möglich (B160)
 - Acceptance (MUST):
-  - Limits greifen deterministisch pro Verbindung (pppX), ohne globale Nebenwirkungen
+  - Limits greifen reproduzierbar (Up/Down soweit im Modell vorgesehen)
+  - Override/Disable ist sauber möglich, ohne “Konfig-Drift” in Nebenpfaden
 
-PH3: Webpanel Core (Onboarding / Claim / Status)
-- Ziel: Minimales internes Webpanel (Status/Onboarding), ohne Internet-Abhängigkeit.
-- MUST:
-  - Onboarding/Claim-Flow ist Claim-Token-basiert (kein VPN-Client-Secret nötig) (B155)
-  - Panel ist nur über VPN/Service-IP erreichbar (Scope via nft) (B220/D003)
-- Acceptance (MUST):
-  - Claim-Token Flow funktioniert end-to-end (UNCLAIMED → CLAIMED) gemäß B155
-  - Keine unnötigen externen Abhängigkeiten für Erstbetrieb (kein “Internet muss gehen, sonst Setup tot”)
-
-PH4: DNS-Stack + DNS-ZWANG + Zeitbasis
+PH3: DNS-Stack + DNS-ZWANG + Zeitbasis
 - Ziel: Namensauflösung und Zeit sind stabil/erzwingbar, damit XP/Web/CA später nicht kollabieren.
 - MUST:
   - Unbound + AdGuardHome intern auf Service-IP (B200)
-  - DNS-Zwang: DNAT TCP/UDP 53 → 10.77.0.1 (B210)
-  - NTP-Strategie aktiv (Client Zeitsync pre-connect + optional NTP-DNAT auf Service-IP) (B260)
+  - DNS-Zwang: DNAT 53 (UDP+TCP) auf SERVICE_DNS (B200/B210)
+  - DNS-Zwang gilt für IPv4 und IPv6 (ADMIN/MODERN Dual-Stack); LEGACY bleibt IPv4-only
+  - NTP-Strategie/Zeitsync so, dass XP nicht an falscher Uhr scheitert (B260)
 - Acceptance (MUST):
-  - DNS-Bypass-Versuch (z.B. 8.8.8.8:53) landet trotzdem intern auf 10.77.0.1 (tcp+udp)
+  - DNS-Bypass-Versuch (z.B. 8.8.8.8:53) landet trotzdem intern auf SERVICE_DNS (tcp+udp)
+  - DNS-Bypass-Versuch über IPv6 (externer v6 DNS) landet ebenfalls intern auf SERVICE_DNS (tcp+udp)
   - XP Client kann nach Connect eine plausible Zeit erreichen (keine Zert-/TLS-Deadlocks durch falsche Uhr)
 
-PH5: CA / Trust / Blockpage-Integration (Webstack-Foundation)
+PH4: CA / Trust / Blockpage-Integration (Webstack-Foundation)
 - Ziel: Interne HTTPS-Services ohne Browser-Warnung + Blockpage Pfad vorbereitet.
 - MUST:
-  - Webstack intern (OpenResty + PHP-FPM + DB; admin-only Extras optional) (B220/D004)
-  - DNS Rewrite (z.B. vpn.status) auf Service-IP + Panel erreichbar (B200)
-  - Root-CA Workflow + XP/MyPal/NSS Import definiert (B250/B240)
+  - Webstack intern (OpenResty + PHP-FPM + DB; admin-only Extras optional) (B220)
+  - DNS Rewrite (z.B. vpn.status) auf Service-IP + interne Erreichbarkeit (B200)
+  - Interne HTTPS-Services (vpn.status / Blockpage) sind über Service-IP im Dual-Stack erreichbar (IPv4 + IPv6 gleichwertig)
+  - Root-CA Workflow + XP/MyPal/NSS Import definiert (B240/B250)
   - AdGuard Blocking mode “Custom IP” zeigt auf internen Webserver (B230)
 - Acceptance (MUST):
   - https://vpn.status im Admin-Netz ohne Warnung (nach CA-Vertrauen)
+  - Zugriff auf interne HTTPS-Endpoints funktioniert sowohl über IPv4 als auch über IPv6 (Dual-Stack gleichwertig)
   - XP/MyPal: nach CA-Import ebenfalls ohne Warnung auf internen HTTPS-Endpoints
   - Blockpage-Pfad: geblockte Domain führt auf interne Blockpage (Custom IP)
+
+PH5: Webpanel Core (Onboarding / Claim / Status)
+- Ziel: Minimales internes Webpanel (Status/Onboarding), ohne Internet-Abhängigkeit.
+- MUST:
+  - Onboarding/Claim-Flow ist Claim-Token-basiert (kein VPN-Client-Secret nötig) (B155)
+  - Verify-Wall ist enforced: email_verified_at==NULL → nur Verify-UI/Flow, keine “normalen” Panel-Aktionen/Readouts (B280)
+  - Panel ist nur über VPN/Service-IP erreichbar (Scope via nft) (B220)
+  - Panel-Readouts sind non-enumerable / read-only im User-Kontext (B155/B220 Leitplanken)
+- Acceptance (MUST):
+  - Claim-Token Flow funktioniert end-to-end (UNCLAIMED → CLAIMED) gemäß B155
+  - Verify-Wall ist nachweisbar wirksam (ohne Verification kein Zugriff auf reguläre Panel-Funktionen/Readouts)
+  - Keine unnötigen externen Abhängigkeiten für Erstbetrieb (kein “Internet muss gehen, sonst Setup tot”)
 
 PH6: Operability / Enforcement Paket (Diag + Fail2ban + Logs + Backup)
 - Ziel: Betriebssicherheit vor “Premium”: Diagnose, Schutz, Rotation/Recovery.
 - MUST:
   - /diag Endpoint (Support/Status) verfügbar (B270)
-  - Fail2ban-Package aktiv (F2B_EVENT Emission + Jails + Matrix + E2E Package) (B340–B343, D010, D011)
+  - Fail2ban-Package aktiv (F2B_EVENT Emission + Jails + Matrix + E2E Package) (B340–B343)
   - Logging/Rotation/Disk-Full Schutz (B330)
   - Backup/Restore Minimum für DB + Konfig (B320)
+  - Session-Tracking/Online-Truth Basis ist operational (run/vpn-sessions + Locks + Reconcile-Mechanik als Admin-Tooling-Grundlage)
+  - SERVICE_SSH ist ein Service im Service-Netz (Zone 0) mit eigener Service-IP; admin-only; kein WAN-bind; Zugriff nur aus ADMIN_VPN_NET (IPv4 + IPv6)
 - Acceptance (MUST):
   - F2B_EVENT Contract validiert (genau 1 Event pro Request; kein Bann bei localhost/NA)
   - Tooling-Nachweis (tcpdump/radsniff) für SrcIP/Calling-Station-Id in Events
   - Disk-Full/Rotation: Logs rotieren, System bleibt stabil, Recovery-Prozess dokumentiert
+  - SERVICE_SSH ist nur aus dem Admin-Netz erreichbar (v4+v6) und aus User/WAN nicht erreichbar (Enforcement nachweisbar)
+
+PH7: Accounting / Session-Mapping (Grundlage für Abrechnung & Reconcile)
+- Ziel: Verbindungsereignisse sind sauber zuordenbar (Session-Mapping), um spätere Policies/Abrechnung/Forensik korrekt zu stützen.
+- MUST:
+  - Accounting Collector + saubere Session-Zuordnung (B165)
+  - Reconcile/Policy-Apply Grundlage (B166) ist operational nutzbar (Admin-Override ohne Gate-Bypass)
+- Acceptance (MUST):
+  - Für jede Verbindung ist Start/Stop (und ggf. Interim) nachvollziehbar und eindeutig zuordenbar (keine Doppelzählung / kein “Lost Stop” ohne Recovery-Pfad)
+  - ONLINE-Truth basiert auf Accounting + Session-Locks; Ghost/fehlende Interim/Stop Zustände werden über Janitor/Recovery deterministisch geheilt (kein Dauer-„Online“-Phantom)
+
+PH8: Restricted Mode (Quota/Expiry/Manual Restrict) – Walled Garden
+- Ziel: Quota/Expiry/Manual Restrict sind als “Restricted Mode” technisch sauber erzwingbar, ohne Admin-Notfallpfade zu zerstören.
+- MUST:
+  - Restricted/Walled-Garden Regeln + Übergänge (B150)
+  - Drift-Guards + Recoveries (B064) schließen kaputte Zustände ohne Datenverlust
+  - ADMIN ist nicht gleichwertig zu MODERN: ADMIN ignoriert Quota/Expiry/UNCLAIMED_OVERDUE/Restricted-by-these; Manual Restrict (Not-Aus) gilt für alle (auch ADMIN); Baseline-Security bleibt auch für ADMIN aktiv
+- Acceptance (MUST):
+  - Restricted erzwingt die vorgesehenen Netz-/Panel-Grenzen deterministisch
+  - Exit/Recovery ist definiert (kein Dead-End State)
+  - MODERN/LEGACY: Quota/Expiry/UNCLAIMED_OVERDUE führt deterministisch zu Restricted (wie modelliert)
+  - ADMIN: Quota/Expiry/UNCLAIMED_OVERDUE führen NICHT zu Restricted (ADMIN-Exception greift)
+  - MANUAL Restrict greift immer – auch bei ADMIN (Not-Aus ist universell)
+  - Baseline-Security (DNS-Zwang, Rate-Limits, Peer-Isolation, Outbound-Abuse-Blocks) bleibt auch im Restricted Mode und auch für ADMIN aktiv
+
+PH9: Monitoring/Reporting/Panel-Stats/Export (read-only)
+- Ziel: Betriebs- und Kunden-/Admin-Transparenz ohne Leaks: Stats/Reports sind konsistent, non-enumerable, exportierbar innerhalb der Policy-Grenzen.
+- MUST:
+  - Panel-Stats Contract + Ampel/ONLINE Logik konsistent (B061)
+  - Monitoring/Retention/Alerting ohne Disk-Overflow (B330)
+  - Export-Mechaniken (read-only) nur in erlaubten Scopes (B220/B330 Leitplanken)
+- Acceptance (MUST):
+  - Stats stimmen mit Accounting/Session-Realität überein (keine “Online”-Phantome)
+  - Panel-Stats/Reports sind non-enumerable und leaken keine IP-Listen/Pool-Details; Ampel/Leitplanken sind konsistent zum Contract (read-only, least-leak)
+  - Retention/Rotation verhindert Disk-Full durch Metriken/Logs
+
+PH10: Extras (nur wenn PH1–PH9 stabil)
+- Ziel: Alles “oben drauf” (Skalierung, Komfort, zusätzliche Module) ohne den Sicherheits- und Stabilitätskern zu gefährden.
+- MUST:
+  - Offene Entscheidungen/Restpunkte aus DoD-Open-List bewusst abarbeiten (B344)
+  - Zusätze dürfen keine Gate-Umgehung, keinen Drift und keine Legacy-Brüche einführen
+- Acceptance (MUST):
+  - Jede Extra-Erweiterung hat eigene DoD/Tests (B310) und bricht keine darunterliegende Acceptance (STOP-Regel)
 
 5) ABNAHME-PRINZIP (STOP-REGEL)
 - Jede Phase hat MUST-Acceptance-Checks. Wenn ein MUST-Check fehlschlägt: STOP, Fix, erneut testen.
@@ -97,6 +161,9 @@ PH6: Operability / Enforcement Paket (Diag + Fail2ban + Logs + Backup)
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.5 (2026-01-23): PH1 Klarstellung: Doktrin-Satz ergänzt (Exposure-by-Binding primär; Default-Deny bezieht sich auf Client-Bubble). Redaktion/DoD-Kohärenz, keine Feature-Änderung.
+- v1.4 (2026-01-22): PH1–PH9 Kanon-Sync: Dual-Stack/IKEv2 (ADMIN/MODERN), NAT66, fixed_ipv6 Pflicht, DNS-Zwang v4+v6, Verify-Wall, SERVICE_SSH Scope, Accounting/Online-Truth, ADMIN-Exception im Restricted Mode, PH9 Stats-Readout Leitplanken präzisiert.
+- v1.3 (2026-01-22): PH-System konsolidiert: B290 ist alleinige SoT; Reihenfolge kanonisiert (PH1 VPN, PH2 QoS, PH3 DNS, PH4 CA/Blockpage, PH5 Webpanel, PH6 Ops/Enforcement) und auf PH7–PH10 erweitert (Accounting, Restricted/Quota, Monitoring/Stats/Export, Extras/DoD-Open).
 - v1.2 (2026-01-13): Added canonical PH1–PH6 (DNS/DNS-zwang, Web/CA/Blockpage, Operability incl. /diag + Fail2ban + logs + backup) and restored sequential phase structure.
 - v1.1: Rollout-Text für PH3 auf neues Onboarding aktualisiert (Verify-Wall + Claim-Token; keine Gate#1/Gate#2 Deadlines als Onboarding-Mechanik).
 - v1.0: Initial

@@ -1,0 +1,452 @@
+=== E) State-Machine (STATUS-SoT) + DB-Outage Contract (Rev-A) ===
+
+DOKUMENT: entwurf_e_002 — REV-A (ENTWURF)
+DATUM: 2026-01-22
+STATUS: ENTWURF (Phase 3; NICHT patchen / NICHT einfügen)
+
+Ziel dieser Rev-A:
+- Strict Kanon-Alignment: Status ist SoT (PREPROVISIONED|CLAIMED|DISABLED).
+- Keine computed states als Arbeitsprinzip.
+- Gute Erweiterungen aus E-002 bleiben erhalten:
+  • Write-Path Matrix (AuthZ-by-design)
+  • Invarianten / Feld-Constraints
+  • Claim-Reset/Timing-Logik für Sales-Usecase
+  • DB-Outage Contract (Fail-Closed, /diag, OOB)
+  • Race/Idempotenz/DoD
+
+======================================================================
+NX-06 — SQL STATUS Core (Status-SoT + Stored Facts + Overlays/Reasons)
+======================================================================
+
+Bezug:
+- Claim/Verify/Reset (Onboarding)
+- Quarantine/IP-Reuse Regeln (Allocator)
+- Immutable/Monotonic Facts (Audit)
+- Hard-Fails / Fail-Closed (AAA / Panel / Enforcement)
+
+-------------------------------------------------
+NX-06.1 Grundprinzip (MUST)
+-------------------------------------------------
+
+1) STATUS ist SoT (MUST)
+- vpn_connection.status ist Single Source of Truth für Lifecycle.
+- Erlaubte Statuswerte:
+  • PREPROVISIONED
+  • CLAIMED
+  • DISABLED
+- Statuswechsel erfolgen nur über definierte Write-Paths (siehe NX-06.5).
+
+2) Facts sind Audit & Policy-Inputs (MUST)
+- Facts (Timestamps/Keys) werden gespeichert, um:
+  • Audit zu ermöglichen
+  • Enforcement-Entscheidungen fail-closed zu machen
+  • Quarantine/IP-Reuse Regeln zu stützen
+- Facts dürfen Status-SoT NICHT ersetzen.
+  => Facts können zusätzliche DENY/RESTRICT-Entscheidungen begründen,
+     aber Status bleibt das Lifecycle-Lichtsignal.
+
+3) Overlays/Reasons statt neuer States (MUST)
+- Dinge wie UNCLAIMED_OVERDUE oder CLAIM_REQUIRED sind KEIN eigener Status.
+- Sie werden als Overlay/Reason modelliert (Restriction/Walled Garden / UI).
+
+4) Fail-Closed als Norm (MUST)
+- Unklarheit/Fehler/DB-Probleme dürfen nie zu „ALLOW by accident“ führen.
+- Wenn nicht sicher entscheidbar: DENY oder RESTRICT.
+
+-------------------------------------------------
+NX-06.2 Entity / Terminologie (MUST)
+-------------------------------------------------
+
+- „vpn_connection“ bezeichnet die fachliche Entity (eine konkrete Verbindung/Instanz).
+- Der physische Tabellenname kann plural sein („vpn_connections“), ohne Semantikänderung.
+- connection_login ist Gate-1 Identity für AAA (bindet Policy an vpn_connection).
+
+-------------------------------------------------
+NX-06.3 Stored Facts (SoT-Felder) — vpn_connection (MUST)
+-------------------------------------------------
+Hinweis: „SoT“ hier bedeutet: diese Felder sind gespeichert und auditierbar.
+Status-SoT ist separat definiert (NX-06.4).
+
+Pflichtfelder (kanonische Baseline):
+- connection_id (PK, intern)
+- connection_login (unique; AAA Identity)
+- conn_group (ENUM {LEGACY, MODERN, ADMIN})
+- fixed_ip (IPv4; unique im Pool-Scope oder global, je nach Pool-Design)
+- fixed_ipv6 (IPv6; unique im Prefix/Pool-Scope; nullable für LEGACY)
+- status (ENUM {PREPROVISIONED, CLAIMED, DISABLED})  <-- Status-SoT
+
+Audit-/Control-Facts (Policy relevant):
+- created_at (timestamp)
+- claimed_at (nullable timestamp; once-write)
+- customer_id (nullable; gesetzt bei Claim; cleared bei Re-provision; niemals bei CLAIMED->Reset)
+- disabled_at (nullable timestamp; Admin/System gesetzt; kann später via Re-enable aufgehoben werden)
+- revoked_at (nullable timestamp; monotonic; Revoke setzt DISABLED + Quarantine)
+- unclaimed_grace_until (nullable timestamp; resettable; Start = NOW()+30d bei Provisioning und Re-provision)
+- claim_deadline (nullable timestamp; resettable via Re-provision; Start = NOW()+180d; Hard-Stop Policy)
+- pw_nt_hash (secret hash; rotatefähig; kein Klartext)
+
+Optional (wenn Kanon es bereits nutzt; ansonsten als Platzhalter entfernen):
+- claim_deadline_set_at (timestamp; Audit)
+- disabled_reason / restricted_reason (ENUM/STRING; siehe NX-06.6)
+
+-------------------------------------------------
+NX-06.4 Status-Definition (MUST)
+-------------------------------------------------
+
+STATUS = PREPROVISIONED
+- Verbindung existiert, ist (noch) nicht an customer_id gebunden.
+- Dürfen hier bereits Einschränkungen gelten? JA, via Overlay/Reason.
+
+STATUS = CLAIMED
+- Verbindung ist an customer_id gebunden und aktiv nutzbar (subject to baseline security, quota/expiry je nach Gruppe).
+- CLAIMED ist in Kanon „monotonic“ im Sinne: kein Lifecycle-Reset zurück zu PREPROVISIONED.
+  (Re-provision ist verboten, solange status=CLAIMED.)
+
+STATUS = DISABLED
+- Verbindung ist hart deaktiviert. AAA muss deny.
+- DISABLED darf nur via definierte Admin-Aktion „Re-enable“ wieder aufgehoben werden.
+
+-------------------------------------------------
+NX-06.5 Write-Path Matrix (MUST; AuthZ-by-design)
+-------------------------------------------------
+Hinweis: Diese Matrix ersetzt computed-states vollständig.
+Jede Mutation ist:
+- authorisiert (wer darf),
+- atomar (TX/Locks),
+- idempotent/konfliktresistent (Race-Regeln),
+- auditierbar.
+
+(1) Provisioning (SYSTEM oder ADMIN)
+Ziel: neue Verbindung anlegen (z.B. Gerät erzeugt / vorbereitet).
+- DARF setzen:
+  • connection_login (unique)
+  • conn_group
+  • fixed_ip, fixed_ipv6 (Allocator TX; unique; Retry bei Collision)
+  • pw_nt_hash (initial)
+  • created_at = NOW()
+  • unclaimed_grace_until = NOW()+30d
+  • claim_deadline = NOW()+180d
+  • status = PREPROVISIONED
+  • customer_id=NULL, claimed_at=NULL
+- MUSS:
+  • atomar sein (TX)
+  • uniqueness garantieren (unique constraints + retry)
+- DARF NICHT:
+  • status=CLAIMED setzen
+  • claimed_at/customer_id setzen
+
+(2) Verify (USER im Panel; betrifft Panel-User, nicht vpn_connection-Lifecycle)
+Ziel: Panel-Account verifizieren, Claim ermöglichen.
+- Setzt typischerweise panel_users.email_verified_at (nicht in vpn_connection).
+- vpn_connection.status bleibt unverändert (PREPROVISIONED).
+- Ergebnis kann UI/Claim-Gate beeinflussen (siehe NX-06.7).
+
+(3) Claim (USER im Panel; SYSTEM führt DB-Write aus)
+Ziel: Verbindung an customer_id binden.
+- Vorbedingungen (MUST):
+  • status = PREPROVISIONED
+  • claimed_at IS NULL
+  • customer_id IS NULL
+  • (optional Kanon-Gate) Panel-User verified
+  • now < claim_deadline (Hard-Stop)
+- Setzt:
+  • status = CLAIMED
+  • claimed_at = NOW() (once-write)
+  • customer_id = <customer_id>
+- MUSS:
+  • atomar mit Lock (SELECT ... FOR UPDATE) gegen Janitor/Hart-Stop (siehe NX-06.8)
+- DARF NICHT:
+  • claim_deadline/unclaimed_grace_until „nachträglich“ manipulieren (außer via Re-provision, die bei CLAIMED verboten ist)
+
+(4) Re-provision / Lifecycle-Reset (ADMIN; Sales-Usecase)
+Ziel: 30 Tage „ab Verkauf“ neu starten, ohne neue Identity anzulegen.
+- Vorbedingung (MUST):
+  • status != CLAIMED   (niemals CLAIMED zurücksetzen)
+- Setzt:
+  • status = PREPROVISIONED
+  • customer_id = NULL
+  • claimed_at = NULL
+  • unclaimed_grace_until = NOW()+30d   (Sales-Reset)
+  • claim_deadline = NOW()+180d         (neuer Claim-Fenster-Start)
+  • optional: claim_deadline_set_at = NOW() (Audit)
+- Token/Credentials:
+  • Claim-Token wird NICHT automatisch rotiert (Rotation ist eigener Flow)
+  • pw_nt_hash Rotation ist optional separater Admin-Flow
+
+(5) Disable (ADMIN oder SYSTEM)
+Ziel: Verbindung hart abschalten (Not-Aus / Hard-Disable).
+- Setzt:
+  • status = DISABLED
+  • disabled_at = NOW()
+  • optional: disabled_reason = MANUAL | HARD_STOP | REVOKED | EXPIRED ...
+- Darf (optional):
+  • aktive Sessions terminieren (Admin-Kill; separater Control-Path)
+- Hinweis:
+  • DISABLED muss AAA deny erzwingen (auch bei DB-Partialproblemen; fail-closed).
+
+(6) Re-enable (ADMIN)
+Ziel: DISABLED aufheben (nur solange Datensatz existiert).
+- Vorbedingung:
+  • status = DISABLED
+- Setzt:
+  • status = PREPROVISIONED
+  • disabled_at bleibt als Audit erhalten (ODER separate disabled_cleared_at; Kanon-Entscheidung)
+  • optional: disabled_reason bleibt (Audit)
+- Hinweis:
+  • Re-enable ist bewusst admin-only, nicht automatisch.
+
+(7) Revoke (ADMIN oder SYSTEM; monotonic)
+Ziel: Verbindung endgültig sperren + IP-Reuse sperren (Quarantine).
+- Setzt:
+  • revoked_at = NOW() (monotonic; darf nie gelöscht werden)
+  • status = DISABLED (fail-closed, lifecycle-consistent)
+  • disabled_at = NOW() falls nicht gesetzt
+  • disabled_reason = REVOKED (optional)
+- Nebenwirkung:
+  • Allocator sperrt fixed_ip/fixed_ipv6 für QUARANTINE_DAYS (siehe NX-06.9)
+- Unrevoke:
+  • gibt es nicht; neue Identity via neue vpn_connection.
+
+(8) Credential Rotate (ADMIN oder SYSTEM; auditpflichtig)
+Ziel: Zugangsdaten tauschen; alte sofort ungültig.
+- Setzt:
+  • pw_nt_hash = <neu>
+  • optional rotated_at
+- Enforcement:
+  • AAA muss alte Credentials sofort rejecten.
+  • Bestehende Sessions: definierter Kill/Reauth-Mechanismus (ops-sicher).
+
+-------------------------------------------------
+NX-06.6 Restriction Overlay / Reason-Codes (MUST)
+-------------------------------------------------
+
+Ziel:
+- Overdue/Warnphasen sichtbar & enforcebar machen, ohne neue Statuswerte.
+
+Begriffe:
+- restriction_mode: {NONE, RESTRICTED, WALLED_GARDEN} (oder Kanon-Äquivalent)
+- restricted_reason: ENUM/STRING (kanonisch vorhandene Werte erweitern nur wenn nötig)
+
+Mindest-Reasons (aus dem Claim-Prozess):
+- CLAIM_REQUIRED        (Warn/UI/Gate)
+- UNCLAIMED_OVERDUE     (nach Grace-Ende, vor Hard-Stop)
+- MANUAL_RESTRICT       (Admin Not-Aus, gilt für alle Gruppen)
+- DB_FAIL_CLOSED        (DB_DOWN/UNKNOWN -> restricted/deny depending policy)
+
+Regeln:
+R1) UNCLAIMED_OVERDUE (Sales-Usecase):
+- Bedingung:
+  • status=PREPROVISIONED
+  • claimed_at IS NULL
+  • now > unclaimed_grace_until
+  • now < claim_deadline
+- Wirkung:
+  • restriction_mode = WALLED_GARDEN/RESTRICTED (Kanon-Overlay)
+  • restricted_reason = UNCLAIMED_OVERDUE
+- Reset:
+  • Re-provision setzt unclaimed_grace_until neu => UNCLAIMED_OVERDUE kann dadurch enden.
+
+R2) CLAIM_REQUIRED:
+- Bedingung: Claim-Flow aktiv, aber Gate nicht erfüllt (z.B. Verify fehlt)
+- Wirkung:
+  • kein Statuswechsel
+  • UI zeigt Gate/Warnung; optional restriction_mode je nach Kanon (Verify-Wall)
+
+R3) MANUAL_RESTRICT:
+- Admin kann jederzeit restriction setzen (Not-Aus)
+- Gilt auch für ADMIN (Baseline-Security, wie Kanon festlegt)
+
+-------------------------------------------------
+NX-06.7 AAA/Enforcement Decision Tree (ohne computed states) (MUST)
+-------------------------------------------------
+
+Ziel:
+- Klare Reihenfolge, wie AAA entscheidet: ALLOW/DENY/RESTRICT.
+- Status bleibt SoT, aber Conditions/Reasons können fail-closed deny/restrict erzwingen.
+
+Reihenfolge (höchste Priorität zuerst):
+
+D1) DB-Outage Fail-Closed
+- Wenn DB_DOWN: new sessions DENY (siehe NX-07)
+- Wenn DB_UNKNOWN: DENY oder RESTRICT (policy), aber NIE ALLOW by accident
+
+D2) status=DISABLED
+- AAA: DENY (immer)
+- Panel: zeigt disabled, nur Admin kann re-enable/re-provision
+
+D3) Hard-Stop Claim Deadline
+- Bedingung:
+  • status=PREPROVISIONED
+  • claimed_at IS NULL
+  • now >= claim_deadline
+- Wirkung:
+  • AAA: DENY (Reason R_HARD_STOP)
+  • Zusätzlich: Janitor/Job DARF status=DISABLED setzen (optional), aber AAA darf nicht davon abhängen.
+  (Fail-Closed Schutz falls Janitor verspätet ist.)
+
+D4) Manual Restrict / Security Restrict
+- Wenn restriction_mode gesetzt (MANUAL_RESTRICT o.ä.):
+  • AAA/Policy: RESTRICT oder DENY je nach Kanon
+  • (Admin bleibt baseline geschützt, aber Admin kann nicht „Allow by accident“ erzwingen)
+
+D5) UNCLAIMED_OVERDUE Overlay
+- Bedingung siehe NX-06.6 R1
+- Wirkung:
+  • RESTRICT/WALLED_GARDEN (kein normaler Internetzugang; Claim weiterhin möglich)
+
+D6) Normalbetrieb
+- status=PREPROVISIONED:
+  • je nach Kanon: minimaler Zugriff (z.B. nur Claim/Verify endpoints) oder restricted baseline
+- status=CLAIMED:
+  • normaler Betrieb nach conn_group (Legacy/Modern/Admin)
+  • baseline security (DNS-Zwang, peer isolation, egress blocks) bleibt aktiv
+
+-------------------------------------------------
+NX-06.8 Race / Idempotenz (MUST)
+-------------------------------------------------
+
+RF-01 Claim vs Hard-Stop-Janitor
+- Claim und Janitor dürfen nicht parallel inkonsistent schreiben.
+- Kanonisch: Entweder Claim gewinnt (-> CLAIMED), oder Janitor gewinnt (-> DISABLED).
+- Umsetzung: Row-Lock SELECT ... FOR UPDATE auf vpn_connection row während Claim und während Janitor.
+
+RF-02 Double-Claim
+- Zwei parallele Claim-Versuche dürfen nicht beide succeeden.
+- Enforcement: unique customer_binding + TX + status check + claimed_at once-write.
+
+RF-03 Re-provision vs Claim
+- Re-provision darf nie auf status=CLAIMED laufen.
+- TX muss prüfen: status != CLAIMED.
+
+RF-04 Credential Rotate
+- Nach Rotate muss AAA alte Credentials deterministisch rejecten.
+- Wiederholte Rotate-Requests dürfen nicht zu inkonsistenten Secrets führen.
+
+-------------------------------------------------
+NX-06.9 Quarantine / IP-Reuse (Allocator-Regel; keine States) (MUST)
+-------------------------------------------------
+
+Ziel:
+- Nach Revoke sollen fixed_ip/fixed_ipv6 für eine Zeit nicht wiederverwendbar sein.
+
+Regel:
+- revoked_at ist monotonic (nicht löschbar).
+- QUARANTINE_DAYS definiert eine Sperrzeit:
+  • Wenn now < revoked_at + QUARANTINE_DAYS:
+      fixed_ip und fixed_ipv6 gelten als RESERVED (nicht allocatable).
+  • Wenn now >= revoked_at + QUARANTINE_DAYS:
+      IPs können wieder allocatable werden (nur wenn keine active binding existiert und Pool-Policy erlaubt).
+- Pool Exhaustion:
+  • Wenn Pool leer: Admin kann Quarantine-Policy überschreiben (Notfall), aber nur mit Audit.
+
+-------------------------------------------------
+NX-06.10 DoD / Tests (MUST)
+-------------------------------------------------
+
+DoD-06-01 Status-SoT Konsistenz
+- Für jede Operation ist klar: setzt sie status? ja/nein.
+- status kann nur über definierte Write-Paths geändert werden.
+
+DoD-06-02 Sales-Usecase (30 Tage ab Verkauf)
+- Provisioning t0: unclaimed_grace_until=t0+30d
+- Verkauf t1>t0+30d: Admin Re-provision => unclaimed_grace_until=t1+30d
+- Kunde hat ab t1 volle Claim-Zeitfenster (Overlay/Restricted korrekt).
+
+DoD-06-03 Hard-Stop fail-closed
+- now>=claim_deadline & status=PREPROVISIONED => AAA DENY
+- Janitor optional setzt DISABLED; AAA darf nicht darauf warten.
+
+DoD-06-04 Idempotenz
+- Re-provision mehrfach hintereinander => konsistente Werte, kein Drift
+- Disable mehrfach => bleibt DISABLED
+- Revoke mehrfach => revoked_at bleibt monotonic, status bleibt DISABLED
+
+DoD-06-05 Quarantine
+- Revoke => IPs unallocatable für QUARANTINE_DAYS
+- Danach optional reusebar (nur wenn Policy erlaubt)
+
+======================================================================
+NX-07 — DB-Outage Contract (DB_DOWN / DB_UNKNOWN) (Rev-A, no computed)
+======================================================================
+
+Ziel:
+- System bleibt sicher (Fail-Closed), debugbar (/diag), operierbar (OOB/breakglass),
+  ohne dass nftables live von DB abhängt.
+
+-------------------------------------------------
+NX-07.1 Definitionen (MUST)
+-------------------------------------------------
+
+DB_DOWN:
+- DB ist nicht erreichbar (Timeout/Connection refused/etc.)
+- System kann keine zuverlässige AuthZ-Entscheidung für neue Sessions treffen.
+
+DB_UNKNOWN:
+- DB ist erreichbar, aber der Zustand ist nicht vertrauenswürdig oder nicht deterministisch entscheidbar,
+  z.B.:
+  • Schema-Drift / missing columns
+  • constraint violations / inconsistent rows
+  • required settings/policies fehlen
+  • Replication lag / stale reads außerhalb erlaubter Toleranz
+- Ergebnis: Fail-Closed, keine „Allow by accident“.
+
+-------------------------------------------------
+NX-07.2 Verhalten (MUST)
+-------------------------------------------------
+
+A) Neue Sessions (AAA)
+- DB_DOWN:
+  • Neue Sessions: DENY (immer; auch ADMIN)
+- DB_UNKNOWN:
+  • Neue Sessions: DENY (default) oder RESTRICT (wenn Kanon explizit erlaubt)
+  • Niemals ALLOW by accident.
+
+B) Bestehende Sessions
+- DB_DOWN/UNKNOWN:
+  • keine automatische Eskalation „auf frei“
+  • optional: keep-alive bis next reauth, aber keine Policy-Erweiterung
+  • Admin hat kontrollierten Kill/Containment-Schalter
+
+C) Panel / UI
+- DB_DOWN:
+  • Panel zeigt degraded mode; keine sensiblen Aktionen (Claim/Reset/Rotate)
+- DB_UNKNOWN:
+  • Panel zeigt „inconsistent“; nur sichere Read-only Ansichten (optional)
+- /diag muss sichtbar machen:
+  • DB status (DOWN/UNKNOWN/OK)
+  • seit wann
+  • letzte erfolgreiche Policy-Materialisierung (Age)
+  • fail-closed mode aktiv (ja/nein)
+
+D) nftables / dataplane
+- nftables darf nicht live „DB reads“ verlangen.
+- Wenn policy materialization stale/unknown:
+  • fail-closed defaults (deny/restrict)
+  • keine allow-by-accident paths.
+
+E) Breakglass / OOB
+- Es muss einen OOB Admin-Zugriffspfad geben (Service-IP / admin-only).
+- Maintenance/Containment Mode:
+  • erlaubt Admin, System in sicheren Minimalzustand zu bringen, ohne DB-Abhängigkeit.
+
+-------------------------------------------------
+NX-07.3 DoD-DB Tests (MUST)
+-------------------------------------------------
+
+DB-01: Simulate DB_DOWN
+- Erwartung: neue AAA sessions deny; /diag zeigt DOWN; keine policy expansion.
+
+DB-02: Simulate DB_UNKNOWN (Schema/Constraints missing)
+- Erwartung: neue sessions deny (oder restricted wenn explizit erlaubt); /diag zeigt UNKNOWN.
+
+DB-03: Recovery
+- DB kommt zurück: System kehrt kontrolliert in OK zurück; kein Allow by accident während Übergang.
+
+DB-04: Dataplane Independence
+- nftables bleibt aktiv; Verhalten ist fail-closed ohne DB live.
+
+======================================================================
+CHANGELOG (ENTWURF)
+======================================================================
+- Rev-A (2026-01-22): Umbau von E-002 auf Kanon: STATUS-SoT (PREPROVISIONED|CLAIMED|DISABLED), Entfernung computed-states,
+  Ersatz durch Write-Paths + Overlay/Reason + AAA Decision Tree, Quarantine als Allocator-Regel, DB-Outage Contract ohne computed-wording.

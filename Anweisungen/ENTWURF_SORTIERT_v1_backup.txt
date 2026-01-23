@@ -1,0 +1,1203 @@
+SORTIERTE VERSION (ohne Umformulierung des Originaltexts)
+Hinweis: Es wurden ausschließlich neue Überschriften/Gliederung eingefügt; alle Originalzeilen wurden 1:1 übernommen und nur umsortiert.
+Quelle: ENTWURF (I-XX) Connection Group is the Primary Policy Key.txt
+
+=== ORIGINAL: Kopf (unverändert) ===
+ENTWURF (I-XX): Connection Group is the Primary Policy Key
+
+Phase: 3 / entwurf
+Kontext: High-Security VPN ISP Plattform (Legacy XP + Modern), SQL-first, strikte Admin-Kontrolle, nftables sauber nach Netzen.
+das ziel ist es, den entwurf patch fähig in das bestehende Konzept übertragen.
+
+
+=== A) Policy-Key, SoT, deterministische Ableitungen ===
+
+0) Ziel & Leitprinzip
+  0.1 Primäridee (MUST)
+    Norm (MUST):
+      Die ausgewählte Connection-Gruppe entscheidet alles Weitere (deterministisch):
+      - Netz/Pools
+      - IP-Stack (v4/v6)
+      - VPN-Profil/Stack
+      - Eligibility für Restricted/Quota/Expiry/Claim-Mechaniken
+      - daraus abgeleitete nftables-Policy nach Netzen (nicht nach Einzel-IPs)
+
+    Ziel:
+      - klare Zuständigkeiten (SQL ist SoT)
+      - keine Sonderlogik pro IP
+      - nftables bleibt strukturiert (Dispatch nach Prefix/Set)
+      - Quarantäne/IP-Reuse rechtssicher und driftarm
+      - Anti-Scan/Reputation Schutz global, ohne Bandbreiten-Hacks
+
+
+1) Begriffe & Single Source of Truth
+  1.1 Entities
+    - Panel-User: Identität im Webpanel (mit Rollen USER/ADMIN).
+    - vpn_connection: konkrete VPN-Identität (Credentials + fixed_ip + Policies);
+    - ein Panel-User kann mehrere vpn_connections haben (z.B. pro Gerät).
+    - Verify (E-Mail) (NORM / Klarstellung):
+      - Verify bezieht sich ausschließlich auf den Panel-User (Webpanel-Account), nicht auf den VPN-Client.
+      - SoT für Verify ist panel_users.email_verified_at (oder äquivalente Panel-User-Entity).
+      - Verify hat keine direkte Auswirkung auf AAA/VPN-AuthN der vpn_connection.
+      - Unverified User darf nicht claimen und keine Panel-Funktionen nutzen (Panel-Contract), aber das ist kein VPN-State.
+
+    - Provisioning-Constraint (MUST):
+      - conn_group ist ein Attribut der vpn_connection (nicht des Panel-Users als Ganzes).
+      - Zuweisung/Änderung von conn_group darf nur durch Panel-User mit Role=ADMIN erfolgen (Provisioning-Aktion).
+      - Panel-User mit Role=USER darf niemals conn_group=ADMIN provisionieren (nur LEGACY/MODERN).
+
+  1.2 Connection Group (SoT) (MUST)
+    Norm (MUST):
+      - Die Gruppe ist ein Attribut der vpn_connection (nicht des Panel-Users als Ganzes).
+      - Sie ist der Primärschlüssel der Policy.
+    Feld (Entwurf): vpn_connections.conn_group
+    Werte: LEGACY, ADMIN, MODERN
+    Hinweis:
+      - Die Panel-Rolle (USER/ADMIN) ist für “wer darf Provisioning auslösen” relevant,
+        aber nicht der Policy-Primärschlüssel.
+      - Policy basiert auf conn_group.
+
+
+2) Deterministische Ableitungen aus conn_group
+  2.1 Ableitungen (MUST)
+    Norm (MUST):
+      Aus conn_group folgen deterministisch (keine freie Konfiguration durch User-UI):
+
+    a) IP-Stack
+      - LEGACY → v4_only
+      - ADMIN  → dualstack
+      - MODERN → dualstack
+
+    b) IPv4 Pool (exklusiv pro Gruppe)
+      - LEGACY → POOL_V4_LEGACY
+      - ADMIN  → POOL_V4_ADMIN
+      - MODERN → POOL_V4_MODERN
+
+    c) IPv6 Pool
+      - LEGACY → NULL
+      - ADMIN  → POOL_V6_ADMIN
+      - MODERN → POOL_V6_MODERN
+
+    d) VPN-Profil / Protokoll-Stack
+      - LEGACY → L2TP/IPsec (XP-Constraints)
+      - ADMIN  → IKEv2 (optional zusätzlich L2TP, falls gewollt)
+      - MODERN → IKEv2
+
+    e) Restricted Eligibility (Quota/Expiry/“Restricted Set”)
+      - ADMIN          → restricted_eligible=false
+      - LEGACY/MODERN  → restricted_eligible=true
+
+    f) Claim/Verify/Deadline Policy
+      - ADMIN          → claim_policy=none
+      - LEGACY/MODERN  → claim_policy=REQUIRED
+
+      Claim-Policy (MUST, driftarm, SQL-first):
+        • SoT-Facts:
+          - unclaimed_grace_until (timestamp): Warnphase-Ende für ungeclaimte Connections
+          - claim_deadline (timestamp): Hard-Stop für ungeclaimte Connections (180 Tage ab created_at)
+          - claimed_at (timestamp nullable): Claim-Fakt (gesetzt = geclaimed)
+
+        • Initialwerte (MUST):
+          - unclaimed_grace_until = NOW() + INTERVAL 30 DAY
+          - claim_deadline        = created_at + INTERVAL 180 DAY
+          - ADMIN ist von Claim ausgenommen (claim_policy=none)
+
+        • Reset (Admin-only) (MUST):
+          - Reset bedeutet: unclaimed_grace_until = NOW() + INTERVAL 30 DAY
+          - Reset verändert NICHT claim_deadline (Hard-Stop bleibt an created_at gebunden).
+          - Claim-Token Lifecycle (MUST, FEST):
+            • claim_token hat KEINE separate TTL/Config (kein eigener Timer/Setting).
+              Der Token-Lifecycle ist an die Lebensphase der unclaimed Connection gebunden.
+            • Gültigkeit (MUST):
+              - claim_token ist gültig solange: claimed_at IS NULL AND NOW() < claim_deadline
+                (also innerhalb der 180-Tage Claim-Lebensphase).
+              - Sobald claimed_at gesetzt ODER NOW() >= claim_deadline: Token ist ungültig
+                (Claim nicht mehr möglich; Hard-Stop greift).
+            • Reset (Admin-only) (MUST):
+              - Reset rotiert den claim_token NICHT automatisch.
+              - Reset betrifft nur unclaimed_grace_until (Warnphase neu starten), nicht claim_deadline.
+            • Regenerate/Resend (USER via Panel → SYSTEM) (MUST):
+              - Zweck: Token verloren/vergessen → User kann im Panel einen neuen Token anfordern.
+              - Wirkung: neuer claim_token wird erzeugt, claim_token_hash wird ersetzt,
+                alter Token ist sofort ungültig (single-valid-token).
+              - Ausgabe/Transport: Token wird dem User bereitgestellt (Panel + E-Mail-Resend möglich).
+		Panel zeigt den Token nur im Moment der Generierung; später nur via Resend/Regenerate.
+                Klartext-Token wird nicht persistiert, nur Hash (SoT bleibt SQL-first).
+            • Guardrails (MUST):
+              - nur nach Login + email_verified_at gesetzt (USER ist ACTIVE im Panel-Contract).
+              - Rate-Limit für Resend/Regenerate (um Mail-Gatling/Abuse zu verhindern).
+              - keine Status-Enumeration: UX-Message ist generisch (kein Leak ob/welche Connection existiert).
+            • Audit (MUST):
+              - Resend/Regenerate erzeugt ein Audit-Event (wer/wann/welche vpn_connection).
+              - Admin-Reset ebenfalls auditpflichtig.
+
+        • Computed Claim-Phasen (MUST, nur wenn claim_policy=REQUIRED):
+          - CLAIM_REQUIRED (Warnphase, gelb): Die VPN-Connection ist noch keinem Panel-User zugeordnet (keine ‘Verheiratung’). Ab Start läuft ein 30-Tage-Timer. Netzpolicy bleibt normal (kein Walled Garden / kein Restricted Overlay). Zweck: Käufer soll im Panel registrieren und via claim_token die Zuordnung bestätigen.
+            Bedingung: claimed_at IS NULL AND NOW() <= unclaimed_grace_until AND NOW() < claim_deadline
+            Wirkung: Panel/UI erinnert sichtbar (Warnphase); KEIN Restricted Overlay/Walled Garden. Restricted beginnt erst bei UNCLAIMED_OVERDUE (NX-05).
+          - UNCLAIMED_OVERDUE (Restricted, rot): 30-Tage-Frist abgelaufen, Connection weiterhin unzugeordnet. Restricted Overlay / Walled Garden aktiv: Internet-Egress gesperrt, interne Services (z.B. Panel/DNS/NTP/Support) bleiben erreichbar. Zweck: Claim erzwingen, ohne Support/Onboarding abzuschneiden.
+            Bedingung: claimed_at IS NULL AND NOW() > unclaimed_grace_until AND NOW() < claim_deadline
+            Wirkung: Walled Garden / Restricted Overlay (NX-05).
+          - DISABLED (computed DENY, Hard-Stop):
+            Bedingung: claimed_at IS NULL AND NOW() >= claim_deadline
+            Wirkung: AAA deny (kein VPN), ohne Job/Worker (rein computed).
+
+        • DB down / Unknown (MUST, fail-closed):
+          - SQL/DB nicht erreichbar ODER Policy-State nicht deterministisch berechenbar → Fail-Closed Verhalten gemäß NX-07.
+          - Neue Sessions/AuthN: AAA deny (gilt auch für ADMIN; keine Ausnahmen).
+          - Bestehende Sessions: Verhalten + Enforcement + Admin-Ops sind kanonisch in NX-07 festgezogen (kein “Allow by accident”).
+
+    Begründung (Designziel):
+      Admin “ist frei” nicht per IP-Ausnahmen, sondern weil Admin-Connections in einem
+      eigenen Netz/Pools liegen und damit automatisch in die Admin-Policy fallen.
+
+
+=== B) Netzmodell, Zonen, Pools, Reservierungen ===
+
+3) Netzdefinition / Pools (B060 Zielstruktur)
+  3.0 Zonenmodell (nftables-Dispatch nach Zonen) (MUST)
+    Norm (MUST):
+      - Zonen sind die primäre Struktur für Routing/Policy (Dispatch nach Prefix).
+      - Jede Zone entspricht genau einem Netz (ipv4 und ipv6, Client-Zonen zusätzlich einem Pool; SERVICE_NET / ZONE 0 ist Infrastructure-Only und kein Client-Pool).
+      - SERVICE_NET (ZONE 0) ist ausschließlich Infrastruktur (Services), niemals Client-Pool.
+
+Die Firewall-Doktrin für Zone 0: „Traffic AN Zone 0 ist Management (Input), Traffic DURCH Zone 0 (Forward) ist verboten.“ Das macht deine nftables-Regeln erst richtig sauber.
+
+    Zonen:
+      - ZONE 0: SERVICE_NET (Infra/Services)
+      - ZONE 1: ADMIN (Admin-Connections; dualstack)
+      - ZONE 2: LEGACY (XP; v4-only)
+      - ZONE 3: MODERN (Modern; dualstack)
+
+    Zonen-Mapping
+      Gruppe   | Zone  | IPv4 Netz        | IPv4 Start-IP  | IPv6 Netz (ULA)           | IPv6 Beispiel-Client IP
+      -------- | ----- | ---------------- | -------------- | ------------------------- | ------------------------
+      SERVICE  | Z0    | 10.77.0.0/28     | 10.77.0.1      | fd77:0:0:0::/64           | fd77:0:0:0::1
+      ADMIN    | Z1    | 10.77.2.0/24     | 10.77.2.1      | fd77:0:0:2::/64           | fd77:0:0:2::100
+      LEGACY   | Z2    | 10.77.16.0/20    | 10.77.16.1     | Deaktiviert               | -
+      MODERN   | Z3    | 10.77.32.0/20    | 10.77.32.1     | fd77:0:0:32::/64          | fd77:0:0:32::5f
+
+Hinweis (MUST):
+      - “IPv4 Start-IP” ist die erste vergebbare Client-IP im jeweiligen Client-Pool (hard-reserved sind nur Netz-ID und Broadcast des jeweiligen Pool-CIDR; zusätzlich kann es eine Tail-Reserve am Ende des Hostranges geben, die standardmäßig nicht allocatable ist und im Notfall freigegeben werden kann – siehe 5.3/5.4).“
+      - Ausnahme SERVICE (ZONE 0): “IPv4 Start-IP” meint die primäre Service-IP (statisch), nicht “vergebbar”.
+      - SERVICE_NET IPs sind statisch und werden NICHT durch PPP/RADIUS/Allocator vergeben.
+
+  3.1 IPv4 Pools (exklusiv pro Gruppe) (MUST)
+    Norm (MUST):
+      Jede Gruppe besitzt einen exklusiven IPv4-Pool. Keine Vermischung.
+
+    - POOL_V4_LEGACY = 10.77.16.0/20 (v4-only, Quarantäne-Puffer)
+    - POOL_V4_ADMIN  = 10.77.2.0/24
+    - POOL_V4_MODERN = 10.77.32.0/20
+
+  3.2 IPv6 Pools (Dualstack Gruppen) (MUST)
+    Norm (MUST):
+      - ADMIN und MODERN erhalten je einen IPv6-Pool/Prefix (ULA).
+      - LEGACY erhält keinen IPv6-Pool (v4-only).
+      - IPv6 Prefixe (kanonisch in diesem Entwurf festgezogen):
+        • POOL_V6_ADMIN  = fd77:0:0:2::/64
+        • POOL_V6_MODERN = fd77:0:0:32::/64
+
+  3.3 Service-Zone (ZONE 0 / SERVICE_NET) (Kontext)
+    Norm (MUST, konsistenzorientiert):
+      - Dienste laufen in einer dedizierten Service-Zone (“ZONE 0 / SERVICE_NET”).
+      - Zweck: Jeder Dienst kann eine eigene, statische Service-IP erhalten (z.B. AdGuard, Unbound, Web/Panel, /diag).
+
+      - IPv4 SERVICE_NET: 10.77.0.0/28
+      - IPv6 SERVICE_NET (ULA): fd77:0:0:0::/64
+
+      - Service-IPs werden ausschließlich serverseitig statisch vergeben:
+        • niemals über PPP/RADIUS/SQL-Allocator
+        • kein Fallback in SERVICE_NET bei DB/SQL-Problemen
+
+      - Policy-Grundsatz:
+        • Zugriff aus Client-Netzen auf SERVICE_NET nur per expliziter Port-Allowlist (Least Privilege)
+        • Default-Deny für alles, was nicht explizit freigeschaltet ist
+        • Forwarding in SERVICE_NET ist standardmäßig untersagt; Ausnahmen nur, wenn Services bewusst als separate Backends (VM/Bridge) geroutet werden
+  
+3.4 Service-IP Mapping (ZONE 0) (ENTWURF; erweiterbar)
+    Norm (MUST):
+      - Mapping ist dokumentiert und driftarm (jede Service-IP hat genau “eine Bedeutung”).
+      - Services können getrennt werden, ohne Client-Pools/Policies umzubauen (nur Allowlist-Regeln referenzieren die Ziel-IP).
+
+    Mapping (Beispiel):
+      - AdGuardHome (DNS Endpoint + UI):
+        • IPv4: 10.77.0.1
+        • IPv6: fd77:0:0:0::1
+      (Zweck: “DNS-Endpunkt (alle Client-DNS-Anfragen landen hier via DNAT) + Admin UI (Port 2000)”)
+
+      - Unbound (Resolver Backend; optional nur von AdGuard/Server erreichbar):
+        • IPv4: 10.77.0.2
+        • IPv6: fd77:0:0:0::2
+
+      - Web/Panel + /diag:
+        • IPv4: 10.77.0.3
+        • IPv6: fd77:0:0:0::3
+
+      - SERVICE_GW (PPP Peer / VPN Gateway):
+        • IPv4: 10.77.0.4
+        • IPv6: fd77:0:0:0::4
+
+      (alle folgenden Service-IPs liegen in SERVICE_NET: 10.77.0.0/28 und fd77:0:0:0::/64)
+
+
+4) Netzvergrößerung für Soft-Delete / Quarantäne (explizit)
+  4.1 Motivation (MUST)
+    Anforderung (MUST):
+      IPs von entzogen/“gelöschten” Kunden/Connections dürfen nicht sofort wiederverwendet werden
+      (Log-Korrelation/Rechtssicherheit), sondern gehen in Quarantäne
+      (QUARANTINE_DAYS, z.B. 180 Tage).
+
+    Problem:
+      Ein /24 (≈253 nutzbare IPs) läuft bei Quarantäne schnell voll (“IP Exhaustion”).
+
+  4.2 Lösung: /20 für LEGACY/USER Pool (MUST)
+    Norm (MUST):
+      Erweiterung des Legacy/User-Netzes auf /20:
+
+      - Netz: 10.77.16.0/20
+      - Nutzbarer Client-Range: 10.77.16.1 bis 10.77.31.254
+      - Kapazität: 4.094 nutzbare IPs (abzüglich Netz-ID + Broadcast; keine Innenreservierungen im Client-Pool)
+
+    Einbindung:
+      Dieses /20 ist der POOL_V4_LEGACY und wird deterministisch für conn_group=LEGACY verwendet.
+
+    DoD-Absicherung:
+      Kapazitätsrechnung + Monitoring/Alert auf Pool-Füllstand (Quarantäne+Churn berücksichtigt);
+      Hard-Fail bei Exhaustion bleibt Pflicht.
+
+
+EF-001 (aus OQ-001) — Gemeinsamer Slot-Allocator (sync v4/v6, random, Rand-only)
+Anker: 5.3–5.5 (IP-Allocator/Exhaustion/Concurrency) + 6.1 (Unveränderlichkeit)
+
+Entscheidung (MUST):
+- Es gibt genau einen gemeinsamen Primärwert ip_slot pro vpn_connection im jeweiligen Pool.
+- ip_slot wird random (CSPRNG) vergeben (Anti-Order/Anti-Enumeration).
+- IPv4 und IPv6 werden deterministisch aus ip_slot abgeleitet (Synchronität für Logging/Correlation).
+- Rand-only: In Client-Pools sind keine Innen-Reservierungen erlaubt (Slotspace bleibt linear/kontiguierlich).
+- Allocator ist liveness-sicher: Random Start + zyklisches Probing über Slots; Fail nur nach vollem Durchlauf.
+
+Validierung (DoD):
+- Liveness: bei fast vollem IPv4-Pool findet Provisioning eine freie Slot-IP (solange Slot frei ist); Fail erst bei kompletter Erschöpfung.
+- Concurrency: parallele Provisionings → keine Duplikate; Retry-Probing funktioniert.
+- Correlation: Logs/Panel korrelieren v4/v6 über ip_slot (nicht über “optisch gleiche” Endzahlen).
+
+
+20) FEST — OQ-002 Reserved IPv4 Regeln + Gateway/PPP Peer in ZONE 0 (SERVICE_GW)
+
+Anker: 5.3 „reserved“, 3.4 Service-IP Mapping (ZONE 0), Zonenmodell (PPP/Service-Net).
+
+Entscheidung (Norm):
+- Client-Pools (Z1/Z2/Z3) sind Rand-only:
+  • hard-reserved sind ausschließlich Netz-ID und Broadcast des jeweiligen Pool-CIDR (niemals freigebbar).
+  • zusätzlich existiert (v4) eine Tail-Reserve am Ende des Hostranges (Notpuffer): standardmäßig nicht allocatable, Admin-only im Notfall freigebbar (siehe 5.3/5.4).
+  • es gibt KEINE Innenreservierungen/Löcher (kein „.1 immer reserved“, keine „.0 pro /24“ Gewohnheit in /20); Tail-Reserve ist kein Loch, sondern ein End-Suffix.
+- Gateway/PPP Peer liegt NICHT im Client-Pool:
+  • Default-Route/PPP-Peer ist SERVICE_GW in ZONE 0 (SERVICE_NET), nicht eine „Gateway-IP“ innerhalb der Pools.
+  • SERVICE_GW ist eine dedizierte Service-IP mit eigener Bedeutung (driftarm; keine Doppelrolle mit DNS/Panel).
+
+Klarstellung (/20-Falle):
+- In einem /20 ist nur die Netz-ID des /20 reserved (z.B. 10.77.16.0) – Adressen wie 10.77.17.0 sind normale Host-IPs (Slots) und dürfen nicht pauschal ausgeschlossen werden.
+
+Validierung (DoD):
+- Allocator-Test: Netz-ID und Broadcast werden niemals vergeben (pro Pool).
+- /20-Test: 10.77.17.0 ist vergebbar (nicht „auto-reserved“), solange nicht belegt/quarantined.
+- Gateway-Test: PPP-Default-Peer/Gateway ist SERVICE_GW (ZONE 0); keine Pool-IP wird als „Gateway-Reserved“ behandelt.
+
+
+=== C) IP-Lifecycle, Drift-Guards, Reconcile ===
+
+5) IP-Lifecycle: Soft-Delete + Quarantäne + Reuse-Policy (SQL/Panel)
+  5.1 Soft-Delete Grundsatz (no physical delete) (MUST)
+    Norm (MUST):
+      Es wird im Normalbetrieb nicht physisch gelöscht (DELETE), sondern logisch entzogen (facts-only, computed state):
+      - disabled_at gesetzt (Admin Hard-Disable; effective_state=DISABLED)
+      - revoked_at gesetzt (Zeitpunkt Entzug; Quarantäne ist computed über revoked_at + QUARANTINE_DAYS)
+
+    Ziel:
+      Audit/Logs bleiben konsistent; IPs werden nicht sofort recycelt.
+
+  5.2 Quarantäne-Fenster (MUST)
+    Norm (MUST):
+      IP ist quarantined, wenn:
+      - revoked_at IS NOT NULL und now < revoked_at + QUARANTINE_DAYS
+      quarantined IP ist nicht vergebbar.
+
+    Norm (MUST):
+      QUARANTINE_DAYS ist kanonischer Parameter (kein Magic).
+
+  5.3 IP-Allocator Regel (MUST)
+    Norm (MUST):
+      Beim Provisioning einer neuen vpn_connection:
+      - Pool bestimmen über conn_group.
+      - Vergabe erfolgt über einen gemeinsamen Slot (ip_slot) als Primärwert:
+        • ip_slot ist random (CSPRNG) (Anti-Order/Anti-Enumeration).
+        • ip_slot ist im Pool eindeutig.
+        • IPv4 und IPv6 werden deterministisch aus ip_slot abgeleitet (Synchronität).
+		• ip_slot ist im Pool eindeutig für gleichzeitig aktive/ALLOCATED Connections (revoked_at IS NULL); revoked Rows sind History/Audit und dürfen denselben ip_slot historisch tragen.
+
+
+      - Slotspace-Regel (Rand-only) (MUST):
+        • Keine Innen-Reservierungen in Client-Pools.
+        • Ausschlüsse sind ausschließlich Pool-Rand (Netz/Broadcast), ein Tail-Reserve-Suffix am Ende (v4) und Pool-fremde Service-IPs
+          - SERVICE_NET / ZONE 0 liegt außerhalb der Pools.
+        • “Reserved” im Sinne von Innen-IPs ist verboten (sonst wäre Slotspace nicht mehr linear).
+
+      - Tail-Reserve (IPv4) (ENTWURF-fest; SQL-first) (MUST):
+        • Zusätzlich zu rand-only (Netz-ID/Broadcast) wird am Ende des IPv4-Hostranges ein Tail-Reserve-Bereich zurückgehalten.
+        • Tail-Reserve ist standardmäßig RESERVED (nicht allocatable), kann aber bei Knappheit Admin-only freigegeben werden (auditpflichtig).
+		„Panel-Gating (MUST): Das Admin-Panel darf den Toggle/Button zur Freigabe der Tail-Reserve nur anzeigen/aktivieren, wenn die IP-Ampel für Zone+v4 = RED ist (siehe NX-02b).“
+        • Parameter (SQL-first, MUST):
+          - IPV4_TAIL_RESERVE_COUNT (Default: 64) pro Pool/Zone
+          - Toggle/Flag “IPv4 Tail Reserve Release aktiv” (Admin-only, auditpflichtig)
+        • Slotspace-Definition (MUST, allocator-relevant):
+          - max_slot(pool) = host_count(pool) - 2  (Netz-ID + Broadcast sind nie allocatable)
+          - effective_max_slot(pool) = max_slot(pool) - IPV4_TAIL_RESERVE_COUNT, solange Release=FALSE
+          - Tail-Reserve Slots = (effective_max_slot+1) .. max_slot
+        • Allocator-Regel (MUST):
+          - Solange Release=FALSE sind Tail-Reserve Slots wie RESERVED zu behandeln (nicht vergebbar),
+            identisch im Verhalten zu “aktiv belegt”/“quarantined” → der Probing-Loop skippt diese Slots.
+
+      - Verfügbarkeit / Exclusions (MUST):
+        Ein Slot ist nicht vergebbar, wenn:
+        • er aktiv belegt ist (aktive Connection mit diesem ip_slot / dieser fixed_ip)
+        • er quarantined ist (5.2; revoked_at + QUARANTINE_DAYS)
+
+      - Ableitung (MUST):
+        • fixed_ip   wird aus (POOL_V4_* + ip_slot) materialisiert und gespeichert.
+        • fixed_ipv6 wird aus (POOL_V6_* Prefix + ip_slot) materialisiert und gespeichert, nur wenn die Gruppe IPv6 hat;
+          sonst fixed_ipv6=NULL (z.B. LEGACY).
+
+      - Korrelation (MUST):
+        Logs/Panel/Support korrelieren v4/v6 über ip_slot (nicht über optische Endzahlen / String-Suffix).
+
+    Begründung:
+      - random Slot verhindert monotone/ordinal ableitbare Vergabe-Reihenfolgen.
+      - mathematische Bindung v4/v6 reduziert Drift und erleichtert Log-Korrelation.
+      - driftarm durch “ein Primärwert (ip_slot) als SoT” + SQL-Constraints + Audit-Events (nicht durch “kleinste frei”).
+
+  5.4 Pool Exhaustion Verhalten (MUST)
+    Norm (MUST):
+      - Exhaustion ist nur gegeben, wenn nach einem vollständigen Slot-Durchlauf (zyklisches Probing) kein verfügbarer Slot existiert.
+      - Tail-Reserve zählt als RESERVED, solange Release=FALSE: Exhaustion bezieht sich auf Slots 1..effective_max_slot(pool).
+      - Hard-Fail. Kein Fallback in falschen Pool.
+      - Eindeutiger Failure-Reason (z.B. “POOL_EXHAUSTED_OR_QUARANTINED”).
+      - Keine Endlos-Loops.
+
+  5.5 Concurrency / Race-Condition Schutz (MUST)
+    Norm (MUST):
+      Slot/IP-Vergabe ist atomar.
+
+            DB-seitig Unique-Constraints + Transaktion:
+      - Uniqueness gilt für gleichzeitig aktive/ALLOCATED Zuweisungen (revoked_at IS NULL) (MUST)
+        • UNIQUE_ACTIVE auf (pool_id, ip_slot) für revoked_at IS NULL (MUST)
+        • UNIQUE_ACTIVE auf fixed_ip (global oder pool-scoped) für revoked_at IS NULL (MUST)
+        • UNIQUE_ACTIVE auf fixed_ipv6 (für IPv6-Pools) (global oder pool-scoped) für revoked_at IS NULL (MUST)
+      - revoked Rows (revoked_at IS NOT NULL) sind History/Audit; Duplikate sind dort zulässig, weil Reuse nach Quarantäne erfolgen darf (5.2, NX-06 REVOKED_EXPIRED).
+
+      Ablauf (MUST):
+      - Random Start-Slot wählen (CSPRNG) → versuchen zu claimen → commit.
+      - Kollision (Unique-Constraint) oder Slot nicht verfügbar (aktiv/quarantined) → probe next Slot (zyklisch, wrap-around).
+      - Wenn kompletter Slotspace geprüft → Exhaustion (5.4).
+
+
+6) Unveränderlichkeit & Drift-Guards
+  6.1 ip_slot / fixed_ip / fixed_ipv6 immutable (MUST)
+    Norm (MUST):
+      - ip_slot wird bei Provisioning vergeben und danach niemals geändert (kein “Umhängen” einer bestehenden vpn_connection auf einen anderen Slot).
+      - fixed_ip wird bei Provisioning materialisiert und danach niemals geändert (kein nachträgliches Umschreiben einer bestehenden vpn_connection).
+      - fixed_ipv6 wird bei Provisioning materialisiert und danach niemals geändert (nur für Gruppen mit IPv6; sonst NULL).
+      - Reuse nach Quarantäne erfolgt ausschließlich durch Provisioning einer neuen vpn_connection (neue Identity); History-Rows bleiben unverändert bestehen.
+
+  6.2 Gruppe kann nicht “heimlich” wechseln (MUST)
+    Norm (MUST):
+      Gruppenwechsel ist kein Alltags-Update, sondern Re-Provisioning:
+      - neue vpn_connection mit neuer fixed_ip im Zielpool
+      - alte Connection bleibt bestehen oder wird DISABLED (je nach Flow)
+
+
+7) Konsistenz- & Reconcile-Regeln (Hard-Fails) (MUST)
+- Zweck:
+  Erzwingt Drift-Freiheit zwischen conn_group ↔ Pools ↔ fixed_ip/fixed_ipv6 und verhindert “Allow by accident”.
+- Norm:
+  Alle Mismatch-/Korruptionsfälle sind fail-closed und erzeugen Audit-Events.
+
+  7.1 Pool-Mismatch = Hard-Fail (MUST)
+    Norm (MUST):
+      conn_group ↔ Pool ↔ fixed_ip müssen konsistent sein.
+
+    Mismatch führt zu:
+      - AAA/Auth-Time: DENY
+      - Reconcile/Janitor: Session-Kill + Audit-Event; optional: Admin-Action “Disable” setzt disabled_at (kein automatischer Write durch Janitor).
+
+    Ziel:
+      Defense-in-Depth gegen Fehlkonfiguration/Manipulation.
+
+
+=== D) Provisioning / Promotion-Demotion ===
+
+8) Promotion / Demotion (Admin als eigene Gruppe, neue Clients)
+  8.1 Promotion (User → Admin) (MUST)
+    Delta-Intention (MUST):
+      - Panel-Admin (Role=ADMIN) erzeugt neue vpn_connection(s) mit conn_group=ADMIN.
+      - IP kommt aus Admin-Pool (5.3–5.5).
+      - Credentials werden zugestellt (E-Mail) und/oder im Panel angezeigt.
+      - Kern: Beförderung ist neue Connection (neuer Client), nicht “Legacy/Modern wird Admin”.
+
+  8.2 Demotion (Admin → User) (MUST)
+    Delta-Intention (MUST):
+      - Alle ADMIN-Connections des Accounts:
+        • sofort disabled_at setzen (effective_state=DISABLED)
+        • optional Hardcut (Session-Kill) für sofortiges Session-Ende
+        • revoked_at setzen → Quarantäne greift (5.2)
+
+    DoD:
+      Nach Demotion darf kein Admin-Netz-Traffic mehr laufen.
+
+
+=== E) State-Machine (Stored Facts + Effective State) + DB-Outage Contract ===
+
+- Bezug: 5.x (Quarantäne) + 6.x (Immutable) + 7.x (Hard-Fails) + 8.x (Promotion/Demotion)
+
+- Ziel:
+  Minimale, driftfreie State-Definition für SQL-first:
+  • Fail-Closed: Fehler/Unklarheit führt nie zu “Allow by accident”.
+
+- Grundprinzip (MUST):
+  • Facts-only Storage: state-relevante Fakten werden als Timestamps/Keys gespeichert (revoked_at, disabled_at, …).
+  • Computed State: effective_state wird deterministisch aus Facts berechnet.
+  • Kein Drift: Es gibt keine status-Spalte als Source of Truth (Variante 1 gesetzt).
+
+- Stored Facts (SoT) — vpn_connection (MUST, semantisch):
+  • connection_id (PK, intern)
+  • connection_login (unique; Gate-1 Identity für AAA; bindet Policy an vpn_connection)
+  • Terminologie-Hinweis (MUST):
+    - Im Text bedeutet “vpn_connection” die fachliche Entity (eine konkrete Verbindung/Instanz).
+    - Der physische SQL-Tabellenname kann “vpn_connections” (Plural) heißen; das ist kein Widerspruch, solange die Felder 1:1 der Entity entsprechen.
+  • conn_group (Primary Policy Key)
+  • fixed_ip (immutable; unique im jeweiligen v4-Pool/Scope)
+  • fixed_ipv6 (nullable für LEGACY; immutable; unique im jeweiligen v6-Prefix/Pool)
+  • created_at (audit)
+  • disabled_at (nullable; Admin Hard-Disable)
+  • revoked_at (nullable; Entzug/Soft-Delete; Quarantäne wird computed)
+  • claimed_at (nullable; falls Claim aktiv ist)
+  • unclaimed_grace_until (timestamp; falls Claim aktiv ist; Warnphase-Ende; Admin-resettable via Claim-Reset)
+  • claim_deadline (timestamp; falls Claim aktiv ist; Hard-Stop für ungeclaimte Connections; initial = created_at + 180 Tage; immutable)
+  • pw_nt_hash (Credential-Material; kein Klartext; SQL-first)
+  • unclaimed_grace_until (nullable; falls Claim aktiv ist; Warnphase-Ende für ungeclaimte Connections; Reset verändert dieses Feld)
+  • claim_deadline (nullable; falls Claim aktiv ist; Hard-Stop für ungeclaimte Connections; initial = created_at + 180d; Reset verändert NICHT dieses Feld)
+
+- Computed effective_state (MUST, feste Priorität; Fail-Closed):
+  Reihenfolge (höchste Priorität zuerst):
+
+    1) DISABLED (AAA deny, kein VPN):
+       Bedingung:
+         - disabled_at IS NOT NULL
+         ODER
+         - (Claim aktiv) claimed_at IS NULL AND now >= claim_deadline
+       Wirkung:
+         - AAA deny (kein VPN) ist zwingend.
+         - Claim/Verify kann DISABLED niemals überstimmen.
+         - Hinweis: disabled_at ist “Admin Hard-Disable”; claim_deadline ist “computed Hard-Stop” (kein Job/Worker nötig).
+
+    2) REVOKED_QUARANTINED:
+       Bedingung: revoked_at IS NOT NULL AND now < revoked_at + QUARANTINE_DAYS
+       Wirkung: Connection ist “parked”; IPs (v4+v6) unvergebbar; keine Reaktivierung ohne neue Connection.
+
+    3) REVOKED_EXPIRED:
+       Bedingung: revoked_at IS NOT NULL AND now >= revoked_at + QUARANTINE_DAYS
+       Wirkung:
+         - Nur die IP-Reuse-Sperre endet: fixed_ip/fixed_ipv6 gelten nach Ablauf der Quarantäne wieder als “free/allocatable”; Uniqueness gilt nur für gleichzeitig aktive/ALLOCATED Zuweisungen (revoked_at IS NULL).
+         - Nur die IP-Reuse-Sperre endet: fixed_ip/fixed_ipv6 dürfen wieder als “free” gelten, sofern das Reuse-Design das vorsieht.
+         - Reaktivierung erfolgt ausschließlich durch neue vpn_connection (neue Identity), nicht durch “Unrevoke”.
+		 
+		 Hinweis: Verify (email_verified_at) ist ein Panel-User-Gate und wird nicht im vpn_connection effective_state abgebildet.
+		Claim-States betreffen die vpn_connection (Zuordnung/Verheiratung), nicht den Panel-User-Verify.
+		
+    4) CLAIM_REQUIRED / UNCLAIMED_OVERDUE (falls Claim aktiv ist):
+       Vorbedingung: claimed_at IS NULL AND now < claim_deadline
+       - CLAIM_REQUIRED (Warnphase):
+         Bedingung: now <= unclaimed_grace_until
+         Wirkung: Panel/UI erinnert sichtbar (gelb).
+       - UNCLAIMED_OVERDUE (Restricted):
+         Bedingung: now > unclaimed_grace_until
+         Wirkung: Walled-Garden / Restricted Overlay (NX-05) (rot).
+
+    5) ACTIVE:
+       Bedingung: keiner der obigen Gründe greift
+       Wirkung: normale Policy aus conn_group (Zone/Pools/Stack).
+
+  Drift-Guard (MUST):
+    • Es gibt kein Feld “status=ACTIVE/REVOKED/QUARANTINED” als SoT.
+    • Performance-Optimierung darf über VIEW/Generated Columns erfolgen, aber Facts bleiben SoT.
+
+- Write-Path Matrix (MUST; AuthZ-by-Design):
+  • Provisioning (SYSTEM/ADMIN):
+    - DARF setzen: connection_login, conn_group, fixed_ip, fixed_ipv6, pw_nt_hash, created_at
+    - MUSS atomar sein (kein Halbzustand).
+    - Falls Claim aktiv ist (claim_policy=REQUIRED): MUSS initial setzen:
+      • unclaimed_grace_until (= NOW() + 30d)
+      • claim_deadline (= created_at + 180d)
+  • Verify (USER via Panel → SYSTEM):
+    - Gilt für Panel-User (panel_users.email_verified_at), nicht für vpn_connection.
+    - MUSS idempotent sein (mehrfaches Verify darf keinen Schaden erzeugen).
+    - Hinweis: Panel-Verify ist ein Panel-Contract/Gate (z.B. für Claim/Features), aber keine AAA/VPN-State-Maschine.
+  • Claim (USER via Panel → SYSTEM):
+    - DARF einmalig setzen: claimed_at
+    - DARF NIE ändern: conn_group, fixed_ip, fixed_ipv6, revoked_at, disabled_at.
+  • Claim-Reset (ADMIN-only):
+    - DARF setzen: unclaimed_grace_until = NOW() + 30d (Warnphase neu starten)
+    - DARF NICHT ändern: claim_deadline (Hard-Stop bleibt an created_at gebunden)
+    - Claim-Token wird beim Reset NICHT automatisch rotiert.
+      Rotation/Regenerate ist ein eigener Panel-Flow (USER) bzw. Admin-Runbook-Schritt (siehe 2.1(f) Claim-Token Lifecycle) und ist auditpflichtig.
+  • Disable/Enable (ADMIN):
+    - DARF setzen/clearen: disabled_at
+    - Auditpflicht: wer/wann/warum.
+  • Revoke (ADMIN oder SYSTEM-Policy):
+    - DARF setzen: revoked_at
+    - revoked_at ist monotonic (einmal gesetzt, nie “zurücknehmen”).
+    - “Unrevoke” erfolgt nicht durch DB-Änderung, sondern durch neue vpn_connection (neue Identity).
+  • Reset/Rotate Credentials (ADMIN oder SYSTEM):
+    - DARF ändern: pw_nt_hash (oder credential-version)
+    - Fail-Closed: alte Credentials sofort ungültig; Sessions deterministisch beenden/reconcile.
+
+- Invarianten (MUST):
+  • conn_group ist policytragend; Änderung nur ADMIN + audit (standardmäßig immutable).
+  • fixed_ip immutable; fixed_ipv6 immutable (wenn gesetzt).
+  • connection_login unique (Normalization/Case-Policy muss einheitlich sein).
+  • revoked_at monotonic.
+  • DB down/unknown → fail-closed (kein Allow on error).
+
+- Mini-Tabelle (MUST): Feld → Constraint → immutable? → Write-Path
+  connection_login → UNIQUE → ja (nach Provisioning) → Provisioning (ADMIN/SYSTEM)
+  conn_group       → ENUM {LEGACY,ADMIN,MODERN} → ja* → Provisioning/ADMIN-only (audit)
+  fixed_ip         → UNIQUE (pool-scoped oder global definiert) → ja → Provisioning (Allocator TX)
+  fixed_ipv6       → UNIQUE per Prefix/Pool; nullable für LEGACY → ja → Provisioning (Allocator TX)
+  pw_nt_hash       → secret hash (NT) → nein (rotate) → ADMIN/SYSTEM (audit)
+
+  (* conn_group: “ja” im Sinne von kein Alltags-Update; Änderung nur als bewusste Admin-Aktion oder Re-Provisioning.)
+
+- DoD (MUST):
+  • Determinismus: Für jede Kombination der Facts ist effective_state eindeutig.
+  • Fail-Closed: DB/Policy-Unklarheit führt zu DENY/RESTRICT, nie zu ALLOW.
+  • Idempotenz: Verify/Claim/Revoke/Disable sind wiederholbar ohne State-Korruption.
+  • Race-Resistenz: paralleles Provisioning erzeugt keine Duplicate IPs (Unique+TX / Retry).
+  • Quarantäne korrekt: revoked_at + QUARANTINE_DAYS steuert “parked” für v4+v6 und Pool-Exhaustion-Logik.
+
+
+NX-07 — DB-Outage Contract (DB down/unknown operationalisiert)
+- Bezug: NX-06 Invarianten “DB down/unknown → fail-closed” + NX-05 Fail-Closed bei restricted-Unsicherheit + /diag Ops-Requirements (PH5).
+
+- Ziel:
+  Fail-Closed Verhalten bei DB-Ausfall so definieren, dass:
+  • kein “Allow by accident” möglich ist,
+  • neue Sessions deterministisch scheitern,
+  • bestehende Sessions keinen Privileggewinn bekommen,
+  • Admin/Ops einen sicheren, debugbaren Ablauf (Runbook/Not-Aus/Maintenance) hat.
+
+- Norm (MUST):
+
+  1) Definition: DB_DOWN / DB_UNKNOWN
+    • DB_DOWN: SQL/DB nicht erreichbar ODER notwendige Query/Tx für AuthN/AuthZ/Policy scheitert (Timeout/Fehler).
+    • DB_UNKNOWN: DB erreichbar, aber Policy-Facts / computed effective_state sind für eine Connection nicht deterministisch ableitbar (Inkonsistenz/Drift/Fehler).
+    • Beide Fälle gelten als “Policy nicht vertrauenswürdig” → Fail-Closed.
+
+  2) Neue Sessions (Login/AuthN) — Option 2.1 (Kanon-Default) (MUST)
+    • DB_DOWN/DB_UNKNOWN → AAA deny (keine neue VPN-Session).
+    • Gilt für alle Connection-Gruppen inkl. ADMIN (keine Sonderfälle pro IP / kein “Admin bypass”).
+    • AuthN liefert eine klare Failure-Reason (Reason-Code), ohne sensitive Interna zu leaken (z.B. “R_DB_DOWN”).
+
+  3) Bestehende Sessions bei DB_DOWN — Option 3.1 (MUST)
+    • Bestehende Sessions werden nicht “neu autorisiert” und nicht “hochgestuft”.
+      - Kein Refresh/Extend von AuthZ/Policy während DB_DOWN.
+      - Keine Policy-Eskalation: insbesondere darf “Unknown” niemals zu “frei” werden.
+    • Enforcement muss auch ohne DB deterministisch bleiben:
+      - Wenn eine notwendige Policy-Entscheidung zur Laufzeit nicht berechenbar ist, gilt Fail-Closed Richtung RESTRICT/DENY (nie ALLOW).
+      - Konsistenzregel: NX-05 gilt weiterhin: “Wenn restricted-Flag nicht eindeutig berechenbar ist (DB down/unknown), gilt restricted (nicht frei).”
+    • Reconnect/Neuaufbau einer Session während DB_DOWN ist immer “neu” → fällt unter Punkt (2) und wird denied.
+
+  4) Materialisierung/Enforcement während DB_DOWN (nftables) (MUST)
+    • nftables darf NICHT “live” von DB abhängen (keine DB-Queries im Paketpfad).
+    • Während DB_DOWN gilt: “stale-safe” ist erlaubt, aber nur fail-closed:
+      - Bestehende, bereits materialisierte Enforcement-Zustände dürfen weiter wirken (stale),
+      - Unknown/fehlende Zuordnung darf niemals zu ALLOW führen.
+    • Minimum-Anforderung: Bei DB_DOWN muss das System einen deterministischen Sicherheitszustand halten können, der mindestens
+      - neue Sessions verhindert (Punkt 2)
+      - und bestehende Sessions nicht versehentlich freischaltet (Punkt 3).
+
+  5) Admin-Ops (Runbook / Not-Aus / Maintenance Mode) — Option 4.2 (MUST)
+    • Erkennbarkeit:
+      - DB_DOWN ist als Incident sichtbar (Health/Diag), inkl. Zeitpunkt “seit wann”, nicht nur “ja/nein”.
+    • Breakglass:
+      - Weil ADMIN-VPN bei DB_DOWN ebenfalls denied ist, MUSS es einen Out-of-Band Zugriffspfad geben (z.B. Provider-Konsole / physischer Zugriff). (Keine Detail-Implementation hier, nur Norm.)
+    • Maintenance Mode (sicherer Not-Aus):
+      - Es existiert ein sicherer Maintenance/Containment-Modus, der unabhängig von DB aktivierbar ist (OOB),
+        um im Incident-Fall deterministisch “fail-closed” zu erzwingen und Lage zu stabilisieren.
+      - Maintenance darf niemals “mehr Allow” erzeugen; höchstens restriktiver werden (RESTRICT/DENY).
+    • /diag (PH5):
+      - /diag stellt die für Debug nötigen, nicht-sensitiven Statusinfos bereit (DB health, Mode, letzte erfolgreiche Policy-Ermittlung / Sync-Alter),
+        ohne Secrets/PII zu leaken. Zugriff nur im sicheren Scope (z.B. ADMIN/SERVICE_NET Policy, nicht öffentlich).
+
+- DoD/Validierung (MUST):
+  • DoD-DB-1 (New Session Fail-Closed): DB stoppen → neuer Login scheitert deterministisch (AAA deny) mit klarer Reason.
+  • DoD-DB-2 (No Allow on Unknown): In keinem Pfad darf DB_UNKNOWN/DB_DOWN zu “frei” führen (Audit/Text/Policy Review).
+  • DoD-DB-3 (Existing Session Non-Escalation): DB stop → bestehende Session darf keinen Privileggewinn bekommen; unknown führt zu RESTRICT/DENY, nicht zu ALLOW.
+  • DoD-DB-4 (Ops/Runbook): Admin kann DB_DOWN sicher erkennen + Maintenance aktivieren (OOB) + nach Restore sauber zurückkehren (kein “stuck state”).
+
+
+18) FEST — Hard-Stop (claim_deadline) = computed DISABLED (DENY), kein Auto-Übergang
+
+Anker: State-Machine „DISABLED (prio 1)“ + NX-06 (effective_state computed only) + NX-07 (Claim Reset nur Admin).
+
+Entscheidung (Norm):
+- Hard-Stop ist rein computed: Wenn claimed_at IS NULL UND now() >= claim_deadline → effective_state führt zu DISABLED (prio 1) und Gate-1/AuthZ ist DENY (Access-Reject).
+Hinweis (Norm): DISABLED durch Hard-Stop beendet bestehende Sessions nicht automatisch; die Wirkung ist „fail-closed für neue Verbindungen“, sofort nur bei explizitem Admin-Session-Kill.
+- Es gibt KEINEN automatischen Übergang in „parked/revoked“ und keine Worker-/Cron-Mutation, die DB-Fakten setzt.
+- Admin-Acknowledge ist optional und rein operativ/UI: Panel kann Hard-Stop als Status/Reason anzeigen; konkrete Aktion bleibt Admin (Claim-Reset / Disable / Revoke / Delete).
+
+Wichtiges Betriebsverhalten (Kanon-treu):
+- Bestehende Sessions werden NICHT automatisch gekappt. Hard-Stop wirkt bei Neuaufbau/Reauth; sofortige Wirkung nur, wenn Admin explizit „Session Kill“ ausführt.
+
+
+19) FEST — Startzeit der 30 Tage (Warnphase) = NOW() (nicht created_at)
+
+Anker: Claim-Policy / SoT-Facts + Initialwerte + Reset (unclaimed_grace_until / claim_deadline).
+
+Entscheidung (Norm):
+- unclaimed_grace_until ist ein Warnphasen-Ende und wird immer relativ zum Zeitpunkt des Setzens berechnet:
+  • Provisioning (SYSTEM/ADMIN): unclaimed_grace_until = NOW() + INTERVAL 30 DAY
+  • Claim-Reset (ADMIN-only):   unclaimed_grace_until = NOW() + INTERVAL 30 DAY
+- created_at ist NICHT Startpunkt der 30 Tage.
+- claim_deadline bleibt getrennt davon und ist an created_at gebunden:
+  • claim_deadline = created_at + INTERVAL 180 DAY
+  • Reset verändert claim_deadline NICHT.
+
+Validierung (DoD):
+- Provisioning-Test: created_at=t0 ⇒ unclaimed_grace_until≈t0+30d, claim_deadline=t0+180d.
+- Reset-Test: Reset bei t1 ⇒ unclaimed_grace_until≈t1+30d, claim_deadline bleibt t0+180d.
+
+
+=== F) nftables / Enforcement / Reachability / DNS / Egress / Anti-Scan ===
+
+9) nftables-Design: sauber nach Netzen (nicht nach IPs)
+  9.1 Policy Dispatch nach Pools (MUST)
+    Norm (MUST):
+      nftables dispatcht nach Source-Netzen:
+      - POOL_V4_LEGACY → Legacy Policy
+      - POOL_V4_ADMIN  → Admin Policy
+      - POOL_V4_MODERN → Modern Policy
+      (analog IPv6 für Admin/Modern)
+
+  9.2 Restricted Overlay (MUST)
+    Norm (MUST):
+      Im deterministischen Normalbetrieb (DB/Policy-State berechenbar) greifen Restricted/Quota/Expiry-Mechaniken nur auf restricted_eligible=true (LEGACY/MODERN).
+      ADMIN ist im Normalbetrieb ausgenommen (eigene Netze/Policy; keine IP-Whitelist-Orgien).
+
+      Ausnahme (Fail-Closed):
+      Bei DB down/unknown oder nicht deterministisch berechenbarem Policy-State gilt Fail-Closed gemäß NX-07: RESTRICT/DENY kann alle Gruppen treffen (inkl. ADMIN); das ist kein “Overlay im Normalbetrieb”, sondern ein globales Sicherheitsfallback.
+	        Referenz: NX-05 Restricted-Overlay Semantik + NX-06 effective_state + NX-07 Fail-Closed Enforcement.
+
+
+10) Anti-Scan / IP-Reputation Schutz: Connection Rate Limit (B100/nftables)
+  10.1 Problem
+    Problem:
+      Viren/Scraper können Portscans/Traffic-Muster erzeugen, ohne Bandbreitenlimits zu triggern,
+      schaden aber der IP-Reputation (Captchas/Blacklists).
+
+   10.2 Lösung: Connection Rate Limit (MUST)
+    Norm (MUST):
+      Rate-Limit auf neue Verbindungen (conntrack NEW) pro Client (Source-IP im VPN-Pool):
+      - Gilt global als Basisschutz für alle Gruppen (LEGACY/ADMIN/MODERN).
+      - “Client” ist der jeweilige Source-Identifier:
+        • IPv4: ip saddr im jeweiligen Pool
+        • IPv6: ip6 saddr im jeweiligen Pool (ADMIN/MODERN)
+      - Admin erhält standardmäßig KEIN Sonderverhalten in der Aktion (Action bleibt identisch),
+        nur optional “mehr Luft” über Parameter (siehe unten), damit die Regel driftarm bleibt.
+
+    Kanonische Parameter (MUST; Werte später festzulegen, aber Existenz/Meaning ist Norm):
+      - CONN_NEW_RATE_PER_SEC (int, >0): erlaubte NEW-Verbindungen pro Sekunde pro Client.
+      - CONN_NEW_BURST (int, >=0): Burst-Puffer für legitime Peaks (Browser/Updates).
+      - CONN_NEW_LOG_RATE_PER_SEC (int, >=0): Log-Ratelimit für Treffer, um Log-DoS auszuschließen.
+      - Optional (OPTION; Default 1.0): CONN_NEW_RATE_ADMIN_MULTIPLIER (float, >=1.0)
+        Zweck: ADMIN kann höhere Schwelle bekommen, ohne andere Semantik/Actions/Hookpoints zu ändern.
+
+  10.3 Enforcement-Punkte / Hookpoints (MUST)
+    Norm (MUST):
+      Es gibt zwei getrennte Hookpoints, um sowohl Internet-Egress als auch Server-Services zu schützen:
+      1) FORWARD (MUST): VPN-Client → Internet/andere Netze
+         - Match: Source ∈ (VPN-Pools v4/v6) AND ct state NEW
+         - Zweck: Portscans/Outbound-Floods dämpfen (IP-Reputation schützen).
+      2) INPUT (MUST): VPN-Client → Service-IP(s) des Servers (SERVICE_NET / ZONE 0)
+         - Match: Source ∈ (VPN-Pools v4/v6) AND Destination ∈ (SERVICE_NET IPs) AND ct state NEW
+         - Zweck: Panel/DNS/NTP/diag/SSH-intern gegen Connection-Flood aus dem VPN schützen.
+      Logging ist immer ratelimited (CONN_NEW_LOG_RATE_PER_SEC), damit keine Disk-/Log-DoS entsteht.
+
+  10.4 Verhalten bei Überschreitung (MUST)
+    Norm (MUST):
+      - Überschreitung → DROP (Stealth-Default, Anti-Scan).
+      - Kein unbounded Logging; Treffer-Logs sind zwingend ratelimited (CONN_NEW_LOG_RATE_PER_SEC).
+
+  10.5 Risiken / Mitigations (MUST)
+    Risiko:
+      False-Positives bei modernen Browsern/Updates oder Admin-Ops Peaks.
+
+    Mitigation (MUST):
+      - Burst ist Pflicht (CONN_NEW_BURST), sonst ist das System praktisch nie patchreif.
+      - Default bleibt global einheitlich (eine Regel, eine Aktion, gleiche Hookpoints).
+      - Wenn Admin-Workflows real leiden: nur über Parameter anpassen (OPTION: CONN_NEW_RATE_ADMIN_MULTIPLIER),
+        nicht über abweichende Action (kein “Admin=REJECT”), um Drift zu vermeiden.
+
+
+NX-03 — Reachability-Contract: Client → SERVICE_NET (Input vs Forward, Hookpoints, Fail-Closed)
+- Bezug: 3.3/3.4 Service-Zone + 9) nftables-Dispatch + wg0.conf Hookpoint-Pattern (PREROUTING DNAT, FORWARD Barriers)
+
+- Ziel:
+  Zeilenfester Contract, wie Clients Services in ZONE 0 erreichen dürfen, ohne dass ZONE 0 jemals als Transit/Forward-Netz “missbraucht” werden kann.
+  Default-Deny / Fail-Closed ist zwingend: kein “Allow by accident”.
+
+- Norm (MUST):
+  • SERVICE_NET (ZONE 0) bleibt Infra-only (3.3): Zugriff aus Client-Zonen erfolgt ausschließlich auf Service-IPs (10.77.0.x / fd77:0:0:0::x), niemals als Client-Pool oder Transit.
+  • Client → SERVICE_NET ist grundsätzlich “Traffic AN Zone 0” und damit INPUT auf lokale Service-IPs (Management/Service-Zugriff), nicht FORWARD-Transit.
+  • FORWARD in SERVICE_NET ist standardmäßig verboten: jeder Forward-Pfad mit dst ∈ SERVICE_NET wird fail-closed gedroppt/rejected (Zone-0-Doktrin).
+  • Ausnahmefall “Backends”: Wenn Services bewusst als separate Backends (VM/Bridge) geroutet werden, dann liegen diese Backends NICHT im SERVICE_NET,
+    sondern in explizit benannten Backend-Netzen/Zonen; Forward-Regeln dürfen nur zu diesen Backend-Zonen existieren (nie generisch “Forward in SERVICE_NET”).
+  • Zugriff auf Services in SERVICE_NET ist strikt Port-Allowlist-basiert (Least Privilege) und referenziert das Service-IP Mapping (3.4);
+    alles, was nicht explizit freigeschaltet ist, ist Default-Deny.
+  • Enforcement-Punkte sind eindeutig (Hookpoints):
+    - Ingress-Steuerung (z.B. DNS-Umleitung/Enforcement) erfolgt am Early-Point in nat/PREROUTING (Interface-basiert am VPN-Ingress),
+      analog zum etablierten wg0.conf Muster (DNAT Port 53 auf Service-IP). Details/Normen für IPv6 DNS Enforcement folgen in NX-04.
+    - Barrieren/Isolation erfolgen in filter/FORWARD (z.B. “kein Transit in SERVICE_NET”, Peer-Isolation-Prinzip als Vorbild).
+    - Service-Exposure auf lokalen Service-IPs erfolgt über filter/INPUT (Port-Allowlist).
+  • Return-Traffic ist stateful: Inbound von “WAN/Outside” in Richtung Client-Netze ist ausschließlich RELATED/ESTABLISHED erlaubt,
+    außer bei explizitem DNAT/Allow (Pattern wie wg0.conf Port-Forwarding: DNAT + gezieltes FORWARD-Allow).
+  • Fail-Closed bei Unklarheit: Wenn Zone/Policy nicht eindeutig bestimmbar ist (Pool-Mismatch/Unknown), ist Zugriff auf SERVICE_NET mindestens DENY
+    (kein Fallback, kein permissiver Default).
+
+- DoD (MUST):
+  • DoD-1 (Input vs Forward): Client kann definierte Service-Ports auf Service-IPs erreichen (INPUT-Allowlist), aber “Transit/Forward nach SERVICE_NET” ist stets denied (FORWARD Barrier greift).
+  • DoD-2 (Allowlist): Nur die in 3.4 referenzierten Services/Ports sind erreichbar; ein zusätzlicher Port ist ohne explizite Freigabe nicht erreichbar (Default-Deny Nachweis via counters/trace).
+  • DoD-3 (Early-Point): DNS Enforcement wirkt am Ingress (PREROUTING) und verhindert DNS-Bypass (v4; v6 Normdetails in NX-04).
+  • DoD-4 (Stateful Return): Von outside/WAN existiert kein “NEW inbound” in Client-Zonen ohne explizite DNAT+Allow; RELATED/ESTABLISHED funktioniert.
+  • DoD-5 (Fail-Closed): Pool-Mismatch/Unknown führt zu DENY auf SERVICE_NET (keine “Allow by accident” Route/Rule).
+
+
+NX-04 — DNS Enforcement für IPv6 (ADMIN/MODERN) (Norm+DoD)
+- Bezug: 2.1(c) IPv6 Pools + 3.3/3.4 SERVICE_NET & Service-IP Mapping (AdGuard) + 9) Dispatch nach Pools
+- Ziel:
+  Für dualstack Gruppen (ADMIN/MODERN) muss DNS über IPv6 ebenso erzwungen werden wie über IPv4:
+  kein “DNS-leak” zu externen v6 Resolvern; Fail-Closed ohne Fallback.
+
+- Norm (MUST):
+  • Scope: NX-04 gilt für conn_group ∈ {ADMIN, MODERN}. LEGACY hat kein IPv6 (v4-only) und fällt nicht darunter.
+  • DNS-Targets (SoT): Als erlaubte Resolver-Ziele gelten ausschließlich die Service-DNS-IPs aus 3.4 “AdGuard (DNS Frontend)”:
+    - IPv4: 10.77.0.1
+    - IPv6: fd77:0:0:0::1
+  • Enforcement-Prinzip: DNS wird am Early-Point am VPN-Ingress erzwungen (nat/PREROUTING) für UDP/53 und TCP/53.
+    - Für IPv6: jeder Client-DNS-Flow (ip6, dport 53, UDP/TCP) aus POOL_V6_ADMIN oder POOL_V6_MODERN wird auf fd77:0:0:0::1 umgebogen (DNAT/Redirect nach Implementationsdetail).
+    - (Parity-Hinweis: analog kann/ soll IPv4 DNS aus POOL_V4_ADMIN/MODERN auf 10.77.0.1 erzwungen sein; v4 Enforcement ist nicht Thema dieses NX, aber die Gleichheit des Prinzips ist Pflicht.)
+  • Hard-Deny gegen Bypass: Zusätzlich (Defense-in-Depth) muss “direkter DNS nach außen” fail-closed sein:
+    - DNS (UDP/53, TCP/53) von ADMIN/MODERN darf außerhalb SERVICE_NET nicht als “NEW” passieren, wenn Ziel != fd77:0:0:0::1 bzw. 10.77.0.1.
+    - Das verhindert Leak bei Fehlkonfiguration/Umgehungsversuchen und macht das Verhalten deterministisch.
+  • Default-Deny/Fallback: Es gibt keinen automatischen Fallback auf externe Resolver. Wenn Service-DNS down ist, ist DNS down (Fail-Closed).
+  • Logging: Block-/Bypass-Versuche werden rate-limited geloggt (Reason-Code “DNS_ENFORCED_V6” / “DNS_BYPASS_BLOCKED_V6” o.ä.), ohne Secrets/PII.
+
+- DoD (MUST):
+  • DoD-1 (Leak-Freiheit): Bei generierten AAAA-Queries von ADMIN/MODERN taucht auf dem WAN/Outside-Interface kein DNS (UDP/TCP 53) als NEW zu externen v6 Zielen auf (tcpdump/pcap Nachweis).
+  • DoD-2 (Enforcement greift): Bei einem Client-Versuch “DNS zu externem v6 Resolver” (z.B. Ziel != fd77:0:0:0::1) wird der Traffic entweder:
+    - nach fd77:0:0:0::1 umgebogen (Early-Point DNAT/Redirect zählt hoch), oder
+    - deterministisch geblockt (Defense-in-Depth Regel zählt hoch).
+    Nachweis über nft counters/trace + optional tcpdump auf SERVICE_NET.
+  • DoD-3 (UDP+TCP): UDP/53 und TCP/53 werden gleichermaßen enforced (kein TCP-Bypass).
+  • DoD-4 (Zonen-spezifisch): ADMIN und MODERN werden getrennt geprüft (je Pool/Prefix), damit keine “nur eine Zone enforced”-Lücke bleibt.
+  • DoD-5 (Fail-Closed): Wenn Service-DNS absichtlich gestoppt wird, funktionieren DNS-Queries nicht (kein stiller External-Fallback); Verhalten ist reproduzierbar.
+
+
+NX-05 — Egress/NAT-Contract pro Zone (Full-Tunnel Realität sauber festziehen)
+- Bezug: 0.1 Leitprinzip, 2.1(e) restricted_eligible, 9.2 Restricted Overlay, 3.0 Zonenmodell (Dispatch nach Prefix/Zone), 3.3/3.4 SERVICE_NET (Infra-only)
+
+- Ziel:
+  Zeilenfester Contract, wie “Internet-Egress” (WAN) je Zone funktioniert, inkl. NAT/Masquerade,
+  und wie “Restricted/Walled-Garden” deterministisch erzwingt wird (Fail-Closed), ohne Sonderlogik pro IP.
+
+- Norm (MUST):
+
+  1) Full-Tunnel Grundsatz (MUST)
+    • Für alle Client-Zonen (Z1 ADMIN, Z2 LEGACY, Z3 MODERN) gilt grundsätzlich Full-Tunnel:
+      Default-Route der Clients zeigt in den Tunnel; Egress ins WAN wird ausschließlich serverseitig geregelt.
+    • Kein “Split-Tunnel by accident”: Wenn Policy unklar ist (Unknown Zone/Pool-Mismatch), ist Egress DENY (Fail-Closed).
+
+  2) NAT/Masquerade — IPv4 (MUST)
+    • IPv4 Egress ins WAN erfolgt über NAT/Masquerade auf dem WAN-Interface.
+    • NAT ist logisch zonenweise definiert (mindestens als getrennte Regeln/Counters pro Zone), auch wenn technisch am selben Hookpoint:
+      - Z2 (LEGACY POOL_V4_LEGACY) → MASQUERADE to WAN
+      - Z3 (MODERN POOL_V4_MODERN) → MASQUERADE to WAN
+      - Z1 (ADMIN  POOL_V4_ADMIN)  → MASQUERADE to WAN
+    • Es gibt keinen Fallback “ohne NAT”: Wenn NAT-Regel fehlt/disabled ist, ist Egress effektiv kaputt (Fail-Closed by reality) und gilt als Incident (Ops).
+
+  3) IPv6 Egress ins WAN (MUST: default-fail-closed bis explizit entschieden)
+    • Aktueller Stand: IPv6 aus Client-Zonen darf NICHT ins WAN egressen (Default-Deny),
+      weil “ULA-only + Internet-Egress” sonst implizit NAT66/NPTv6 Entscheidungen erzwingen würde.
+    • Erlaubt ist IPv6 ausschließlich:
+      - Client-Zone → SERVICE_NET (Zone 0) auf explizite Allowlist (siehe NX-03/NX-04, z.B. DNS zu fd77:0:0:0::1)
+      - sowie stateful return für diese erlaubten Flows (RELATED/ESTABLISHED).
+    • Wenn später echter IPv6-Internet-Egress gewollt ist, muss dafür ein eigener Contract eingeführt werden
+      (z.B. NAT66 vs NPTv6 vs echtes GUA-IPv6) — nicht still/implizit.
+
+  4) Restricted Overlay (“Walled Garden”) (MUST)
+    • Restricted Overlay Trigger Set (MUST):
+      - RESTRICT_TRIGGER_STATES (MUST): { UNCLAIMED_OVERDUE }
+      - CLAIM_REQUIRED ist explizit ausgeschlossen: Warnphase/UI-only (kein Restricted Overlay, kein Walled Garden).
+	  Hinweis (Trennung): Restricted Overlay ist claim-policy-basiert (UNCLAIMED_OVERDUE) bzw. Fail-Closed-Fallback bei Unknown/DB-down. Fail2ban ist ein separates Abuse-/Intrusion-Schutzsystem und kein Teil der Claim-Policy.
+      - Erweiterungen (z.B. Quota/Expiry) erfolgen ausschließlich durch Ergänzung von RESTRICT_TRIGGER_STATES (nur mit explizitem GO + Konsistenzprüfung).
+    • restricted_eligible=true gilt nur für LEGACY/MODERN (2.1(e)); ADMIN ist ausgeschlossen.
+    •  Wenn eine Connection in einen restricted effective_state fällt (z.B. UNCLAIMED_OVERDUE),  dann gilt für diese Connection ein deterministischer Minimal-Egress (“Walled Garden”):
+      - Erlaubt:
+        (a) DNS nur zum Service-DNS (3.4): 10.77.0.1 und (für dualstack) fd77:0:0:0::1 (NX-04)
+        (b) Panel/Web nur zum Service-Web (3.4): 10.77.0.3 und (für dualstack) fd77:0:0:0::3
+      - Verboten:
+        (a) jeglicher Internet-Egress (WAN) (v4/v6)
+        (b) jeglicher Zugriff auf andere Client-Zonen (Peer/Sideways)
+        (c) jegliche nicht explizit allowlistete Ports in SERVICE_NET
+    • Fail-Closed: Wenn restricted-Flag nicht eindeutig berechenbar ist (DB down/unknown), gilt restricted (nicht “frei”).
+
+  5) ADMIN Egress (“frei” heißt konkret) (MUST)
+    • ADMIN bedeutet:
+      - kein Restricted Overlay (restricted_eligible=false)
+	  Ausnahme: bei DB down/unknown (Fail-Closed) kann RESTRICT/DENY auch ADMIN treffen (siehe 4)
+      - damit greifen keine restricted-basierten Gates/Overlays (z.B. Claim/Quota/Expiry), unabhängig davon, wie diese Overlays später im Detail ausgestaltet werden
+    • ADMIN ist dennoch nicht “special-case pro IP”, sondern automatisch durch Zone (Z1) + Pool + Policy getrennt.
+    • ADMIN darf IPv4 ins WAN egressen (NAT/Masquerade gemäß 2).
+    • IPv6-WAN-Egress bleibt auch für ADMIN default-deny bis ein eigener v6-Internet-Contract existiert (siehe 3).
+
+  6) Logging/Debuggability (MUST)
+    • Für jeden Egress-Entscheid (ALLOW/DENY/REDIRECT) existieren counters/Reason-Codes mindestens zonenweise:
+      - “EGRESS_WAN_V4_ALLOWED_Zx”
+      - “EGRESS_WAN_DENIED_RESTRICTED_Zx”
+      - “EGRESS_V6_WAN_DENY_DEFAULT”
+      (Bezeichner sind Beispiele; wichtig ist deterministische Trennbarkeit pro Zone.)
+    • Logging ist ratelimited (Log-DoS verhindern). Keine Secrets/PII.
+
+- DoD (MUST):
+  • DoD-1 (Full-Tunnel Proof): Client in LEGACY/MODERN erreicht das Internet über IPv4 (NAT greift), und der WAN-Traffic zeigt Source=WAN-IP (Masquerade) — Nachweis via tcpdump auf WAN + counters.
+  • DoD-2 (Zonen-Trennung): Ein LEGACY-Client kann nicht “als ADMIN egressen” (kein Cross-Pool-Fallback, kein “Allow by accident”); Mismatch führt zu DENY (7.1, NX-06 Fail-Closed).
+  • DoD-3 (Restricted Walled Garden): Wenn restricted effective_state aktiv ist, funktionieren nur:
+      - DNS zu 10.77.0.1 (und fd77:0:0:0::1 falls dualstack)
+      - Panel/Web zu 10.77.0.3 (und fd77:0:0:0::3 falls dualstack)
+    und Internet-Egress ist zuverlässig blockiert (v4/v6). Nachweis via nft counters + negative tests (curl/apt/ping etc. scheitert konsistent).
+  • DoD-4 (ADMIN “frei”): ADMIN kann IPv4-WAN egressen, aber bleibt zonengetrennt; Restricted greift im Normalbetrieb (deterministisch berechenbar) niemals auf ADMIN; bei DB down/unknown (Fail-Closed) gilt RESTRICT/DENY auch für ADMIN (keine Immunisierung).
+  • DoD-5 (IPv6 WAN Fail-Closed): IPv6 traffic aus Client-Zonen Richtung WAN wird deterministisch geblockt (kein Leak), während v6 zu SERVICE_NET (DNS/Web) funktioniert.
+  • DoD-6 (Observability): Pro Zone sind die Egress-Entscheide nachvollziehbar (counters/trace), ohne dass Logs unbounded wachsen.
+
+
+16) FEST nftables Materialisierung/Enforcement: wie kommt “restricted effective_state” in Firewall-Entscheidungen?
+
+Entscheidung (MUST):
+  - Enforcement erfolgt über nftables Sets (State-basiert), NICHT über Einzelregeln pro IP.
+  - Dual-Stack Pflicht (MUST, MODERN/Admin dualstack):
+      • restricted_v4 (inet/ip family passend) UND restricted_v6 (ip6 family passend).
+    Begründung: Ohne restricted_v6 wäre Restricted bei Dual-Stack via IPv6 umgehbar.
+
+Kanonischer Pipeline-Contract (MUST):
+  1) SoT ist SQL (effective_state je Connection/Session/Lease – je nachdem wie du es im Stack führst).
+  2) Ein Apply/Reconcile-Mechanismus materialisiert Restricted in nftables:
+     - Wenn Restricted = true:
+         IPv4-Adresse ∈ restricted_v4
+         UND (falls IPv6 für die Zone aktiv ist) IPv6-Adresse ∈ restricted_v6
+     - Wenn Restricted = false:
+         IPv4-Adresse wird aus restricted_v4 entfernt
+         UND (falls IPv6 aktiv) IPv6-Adresse wird aus restricted_v6 entfernt
+  3) Synchronitätsregel (MUST):
+     - v4/v6 werden als ein logischer Zustand behandelt (kein „v4 restricted, v6 frei“).
+     - Für Zonen ohne IPv6 (LEGACY v4-only) ist restricted_v6 ein No-Op, aber IPv6 ist dort ohnehin deaktiviert/gesperrt.
+
+Validierung / DoD (MUST):
+  - Dual-Stack Bypass-Test: MODERN-Client wird Restricted → IPv4 UND IPv6 Egress sind restricted/umgeleitet (kein „IPv6-frei“).
+  - Reconcile-Konsistenz: Umschalten Restricted true/false erzeugt deterministische Set-Mitgliedschaft (v4+v6 synchron).
+  - Fail-Closed-Intention bleibt bestehen: Restricted darf nicht „durch Zufall“ ausfallen; wenn Apply/Reconcile nicht laufen kann,
+    ist das ein Health-Alarm und muss opsseitig sichtbar sein (keine stille Degradierung).
+
+
+=== H) IKEv2 / Credentials / Gate-0 PSK Ops-Contract ===
+
+NX-01 — IKEv2 AuthN/Credential-Contract für ADMIN/MODERN
+- Bezug: 2.1(d) “ADMIN/MODERN → IKEv2”
+
+- Norm (MUST):
+  • Gate-0 (Tunnel): IKEv2/IPsec nutzt ein server Ca. server ca ist Zugangsvoraussetzung, aber niemals Identität/Policy-Key.
+  • Gate-1 (Identität): Identität/Policy bindet an vpn_connection via connection_login (Username/Password), nicht an PSK.
+  • ADMIN/MODERN: IKEv2 AuthN erfolgt über EAP-MSCHAPv2 (User/Pass), damit das Prinzip identisch zu LEGACY bleibt (nur anderer Träger).
+  • LEGACY/MODERN/ADMIN teilen das Credential-Prinzip: Username/Password pro vpn_connection (connection_login); keine getrennten “Modern-only” Credentials.
+  • SQL-first Credential-Material: pro vpn_connection wird NT-Hash gespeichert; kein Klartext-Passwort; RADIUS/EAP/PPP prüft gegen SQL.
+  • Reset/Rotate ist fail-closed: alte Credentials werden entzogen (revoked), neue werden aktiv; bestehende Sessions werden deterministisch beendet/reconciled.
+  • Abuse-Schutz ist Pflicht: RateLimit/Lockout pro connection_login + endpoint; Reason-Codes intern detailliert, extern nicht enumerationsfreundlich.
+
+- DoD (MUST):
+  • Wrong PSK → kein Tunnel; Gate-1 ist nicht erreichbar.
+  • Correct PSK + wrong User/Pass → DENY + RateLimit/Lockout + Audit-Event.
+  • Reset/Rotate → alte creds fail, neue succeed; aktive Session endet deterministisch.
+  • Gleiches Policy/Audit-Verhalten für LEGACY und MODERN (nur Träger PPP vs EAP unterscheidet sich).
+
+
+
+17) fest IKEv2 Gate-0 PSK (GLOBAL) — Ops-Contract (Storage / Visibility / Distribution / Rotation / Incident)
+
+Anker: NX-01 „Server ca ist Gate-0“.
+
+Ziel (Norm):
+- Server ca ist Gate-0 (Infrastruktur-Zugang), aber NICHT der primäre Account-Faktor.
+- Primär bleibt: vpn-Username + vpn-Password (Gate-1).
+- Panel ist NIE öffentlich; WAN sieht nur IPsec (UDP 500/4500 + ESP/NAT-T je nach Stack).
+
+1) Storage (MUST)
+- PSK ist ein Infrastruktur-Secret (wie Root/Host-Key), nicht “User-Policy”.
+- SoT ist serverseitig als File (z.B. ipsec.secrets / include), root-only (chmod 600), kein Klartext-PSK in SQL.
+- PSK-Wert wird nicht “abgeleitet” und nicht automatisch durch SQL/Panel-Events rotiert.
+
+2) Visibility im Panel (MUST, Usability)
+- Panel darf (nach erfolgreicher AuthN/AuthZ) die Verbindungsparameter für den User anzeigen.
+- PSK darf im Panel lesbar angezeigt werden (bewusste Usability-Entscheidung).
+- Hinweis: VPN-Passwort-Handling ist separat geregelt (PW-A / Reset-Flow). Dieser Abschnitt regelt PSK (Storage/Visibility/Distribution/Rotation/Incident), nicht die Passwort-Speicherung.
+
+3) Distribution / Onboarding (MUST, “kein WAN-Service”)
+- Keine öffentliche Download/Page im WAN (kein zusätzlicher Nginx o.ä. nur dafür).
+- Out-of-band Zustellung ist Pflicht: E-Mail an die verifizierte Adresse ist der Standardkanal.
+- Minimal-Set, das der User erhält: FQDN/Server, PSK, vpn-Username, (vpn-Password gemäß PW-A oder Reset-Mechanik), kurze Setup-Hinweise.
+
+4) Rotation (MUST, aber vollständig MANUELL / Admin-Entscheid)
+- Rotation ist niemals ein Automatismus (nicht durch Rate-Limits/Noise allein).
+- Rotation ist Ultima Ratio und wird nur durch den Admin bewusst ausgelöst.
+- Rotationsmodell ist Cutover (ein aktiver PSK). “Old+New parallel” ist nicht als Standard zugesagt.
+
+Cutover-Runbook (Norm, ohne Implementation):
+a) Admin erzeugt neuen PSK.
+b) Admin triggert “Rotation” im Panel (Admin-only), wodurch:
+   - Server-PSK (File-SoT) umgestellt wird,
+   - und eine Benachrichtigung an ALLE betroffenen ACTIVE/CLAIMED User per E-Mail rausgeht (neuer PSK + Cutover-Zeitpunkt).
+c) Wichtiges Betriebsverhalten:
+   - Bestehende VPN-Verbindungen werden NICHT automatisch gekappt.
+   - Neue Aushandlungen/Reconnects nach Cutover benötigen den neuen PSK.
+   - Optional (nur wenn Admin es explizit will): “Session Kill (Scope global)” als separater, bewusster Admin-Schritt.
+
+Begründungskonsistenz zu Kanon:
+- Kanonisches Prinzip “bestehende Sessions bleiben, neue Logins fail-closed bei Backend-Ausfall” bleibt unangetastet.
+- “Session Kill” bleibt ein Werkzeug/Runbook-Schritt, kein Automatismus.
+
+5) Incident / Leak-Handling (MUST, “lightweight”)
+- PSK-Leak ist operativ ein “Stealth/Gate-0 ist kompromittiert”-Signal (Angriffsoberfläche steigt), aber kein automatischer Account-Break.
+- Primäre Gegenmaßnahmen sind Abuse-Controls (Rate-Limits/Fail2ban/Firewall-Policies).
+- Rotation wird ausgelöst, wenn:
+  - Abuse/Noise nicht mehr beherrschbar ist ODER
+  - confirmed Leak / Ops-Policy es verlangt (z.B. periodisch, oder nach bestätigtem massiven Leak).
+- Bei Rotation: Audit-Event (PSK_ROTATED) + Notification-Event (PSK_ROTATION_NOTICE_SENT) sind Pflicht (ohne dass automatisch Sessions gekillt werden).
+
+Validierung / DoD (MUST)
+- Drill “PSK Rotation Cutover”:
+  1) Vor Cutover: Client verbindet mit altem PSK.
+  2) Cutover: Server-PSK gewechselt + Email raus.
+  3) Bestehende Session bleibt zunächst online (kein Auto-Kill).
+  4) Neuer Connect/Reconnect mit altem PSK scheitert.
+  5) Connect mit neuem PSK funktioniert wieder.
+  6) Kein Policy-Bypass: Restricted/Full greifen unverändert; keine “unpoliced windows”.
+
+
+EF-002 (aus ehem. OQ-007) — IKEv2 Server ca: Ops-Contract ist FEST
+Anker: 17) „fest IKEv2 Gate-0 Server ca“ + NX-01
+Entscheidung (MUST):
+-  Server ca ist Gate-0 (Infrastruktur-Zugang), nicht Identität/Policy-Key; Gate-1 bleibt connection_login (User/Pass) (Konsistenz zu NX-01).
+- SoT/Storage bleibt File (ipsec.secrets o.ä.), root-only; kein Klartext-PSK in SQL.
+- Distribution ist out-of-band (E-Mail an verifizierte Adresse), kein WAN-Service nur dafür.
+-  Rotation ist rein manuell (Admin-Entscheid) inkl. Cutover-Runbook; kein Automatismus.
+Validierung (DoD):
+-  Drill “PSK Rotation Cutover” gemäß 17) DoD (Reconnect alt failt, neu succeed, keine Auto-Kills).
+
+
+
+
+=== I) Dualstack Slot-Mapping + Panel-Stats ===
+
+NX-02 — Dualstack Slot-Mapping (Variante R) (v4/v6 synchron, SQL-first, driftarm)
+- Bezug: 2.1(a,c) + 3.2 (POOL_V6_ADMIN/MODERN) + 5.3–5.5 (ip_slot Allocator + Quarantäne + Uniqueness)
+
+- Ziel:
+  Dualstack ist deterministisch und driftarm: pro vpn_connection genau ein ip_slot als SoT,
+  daraus werden fixed_ip (v4) und fixed_ipv6 (v6) materialisiert.
+  Keine getrennten Random-Allocators (kein Drift v4≠v6), keine “Löcher” durch Gateway-IPs im Client-Pool (OQ-002).
+
+- Norm (MUST):
+
+  1) v6_addr_policy pro conn_group (MUST)
+    • LEGACY: v6_addr_policy=NONE (v4-only; fixed_ipv6 ist NULL)
+    • ADMIN:  v6_addr_policy=FIXED_SQL (dualstack; fixed_ipv6 ist gesetzt)
+    • MODERN: v6_addr_policy=FIXED_SQL (dualstack; fixed_ipv6 ist gesetzt)
+
+  2) SoT & Immutable (MUST)
+    • ip_slot ist der Primärwert (SoT) für die Adresszuweisung der vpn_connection.
+    • fixed_ip und fixed_ipv6 werden beim Provisioning materialisiert und sind danach immutable.
+    • Write-Path ist Provisioning (Admin-Override nur als Notfall, auditpflichtig).
+
+  3) Slot-Synchronität (MUST)
+    • Für dualstack gilt: IPv4 und IPv6 teilen denselben ip_slot.
+    • Korrelation erfolgt über ip_slot (nicht über optische Endzahlen der IP-Strings).
+
+  4) Ableitung IPv6 aus ip_slot (MUST)
+    • ADMIN:  fixed_ipv6 = fd77:0:0:2:: + ip_slot
+    • MODERN: fixed_ipv6 = fd77:0:0:32:: + ip_slot
+    • ip_slot startet bei 1. ::0 ist damit automatisch ausgeschlossen (kein Slot 0).
+
+  5) IPv6 Hostrange / Slotspace (MUST, konsistent zu IPv4)
+    • Der maximal nutzbare Slotspace wird pro Pool über die IPv4-Kapazität definiert (weil Sync v4/v6).
+      - ADMIN v4 /24 → max_slot = 254 → gültige Slots 1..254
+      - MODERN v4 /20 → max_slot = 4094 → gültige Slots 1..4094
+    • Es gibt im IPv6-Pool keine zusätzlichen “infra-reserved” Innenreservierungen.
+      (Ausnahme: ::0 ist durch Slotstart=1 ohnehin ausgeschlossen.)
+
+  6) Uniqueness / Constraints (MUST)
+    • Uniqueness gilt für gleichzeitig aktive/ALLOCATED Zuweisungen (revoked_at IS NULL):
+      - ip_slot ist UNIQUE innerhalb (pool_id) für revoked_at IS NULL.
+      - fixed_ip ist UNIQUE im definierten Scope (global oder pool-scoped) für revoked_at IS NULL.
+      - fixed_ipv6 ist UNIQUE innerhalb (pool_v6_id / Prefix) für revoked_at IS NULL.
+    • Kollisionen sind nur theoretisch möglich (manuelles Override/Fehler) und führen zu Hard-Fail + Audit.
+
+  7) Quarantäne/Re-use Policy für IPv6 (MUST)
+    • IPv6 folgt exakt derselben Quarantäne-Logik wie IPv4 (revoked_at + QUARANTINE_DAYS).
+    • Wenn revoked: slot ist quarantined und nicht vergebbar bis Ablauf (kein “v6 ist egal”).
+
+  8) Exhaustion Verhalten (MUST)
+    • Exhaustion liegt vor, wenn nach vollständigem zyklischen Probing kein freier, nicht-quarantined Slot
+      im gültigen Slotspace existiert.
+    • Hard-Fail, kein Pool-Fallback, eindeutiger Reason.
+
+  9) Logging/Audit-Konsistenz (MUST)
+    • Dualstack wird als ein Session-Kontext behandelt (connection_id/conn_group ist der Schlüssel).
+    • Audit/Accounting führen (wo verfügbar) v4 + v6, aber die Korrelation erfolgt über ip_slot.
+    • Keine Secrets in Logs (nur IDs, IPs, Reason-Codes).
+
+
+NX-02b (NX-Panel-Stats) — Panel-Stat-Contract “IP Ampel” pro Zone (Admin-only) (ENTWURF → später PH5/PH6)
+- Ziel:
+  Gimmick + Ops-Sicherheit. Zeigt pro Zone und pro Address-Family (v4/v6): allocated/frei/parked/reserviert + ONLINE-Status + Ampelstatus.
+  (ALLOCATED ist SoT/DB-basiert; ONLINE ist Laufzeit/Accounting-basiert.)
+
+- Norm (MUST, definitorisch):
+  • ALLOCATED (Assigned): IP ist einer vpn_connection zugewiesen/provisioniert (SoT) und NICHT revoked.
+    - v4: fixed_ip ist gesetzt UND revoked_at ist NULL
+    - v6: fixed_ipv6 ist gesetzt UND revoked_at ist NULL
+    (ALLOCATED ist unabhängig davon, ob die Connection gerade online ist.)
+  • ONLINE: Laufzeit-Status “Session ist aktiv”.
+    - ONLINE ist eine separate Metrik und darf ALLOCATED nicht ersetzen.
+
+    • PARKED: revoked_at ist gesetzt UND now < revoked_at + QUARANTINE_DAYS
+  • RESERVED:
+    - v6: keine Innen-Reservierungen im Client-Prefix; Slotstart=1 impliziert ::0 ist nicht nutzbar (kein Slot 0)
+    - v4: rand-only infra-reserved (Netz-ID + Broadcast je CIDR) + IPv4 Tail-Reserve (siehe unten)
+  • FREE: Pool-Kapazität(Slotspace) minus (ALLOCATED + PARKED + RESERVED)
+
+  • Ampel (GREEN/YELLOW/RED):
+    - Ampel wird pro Zone + Address-Family über SQL-first Schwellwerte berechnet.
+    - Schwellwerte sind konfigurierbar (keine Hardcodierung in Text/Config).
+    - UI-Mapping (Claim): YELLOW entspricht CLAIM_REQUIRED (Warnphase, kein Restricted Overlay). RED entspricht UNCLAIMED_OVERDUE (Restricted/Walled Garden aktiv).“
+
+- ONLINE Source of Truth (SoT) (ENTWURF-fest):
+  • Panel-SoT (Frontend): ONLINE wird ausschließlich aus SQL gelesen (RADIUS Accounting / radacct).
+    - Das Panel macht keine Live-Systemcalls (kein ip link/pppX/strongSwan-Status pro Page-Load).
+    - Ziel: Panel bleibt schnell, deterministisch, SQL-first.
+  • Wahrheit für “ONLINE/BILLABLE” bei L2TP/IPsec (XP) ist PPP/Accounting:
+    - IPsec (strongSwan) kann stehen, während PPP innen tot ist → strongSwan-SA ist nicht ONLINE-SoT für User.
+    - ONLINE wird deshalb aus PPP/RADIUS abgeleitet, nicht aus strongSwan.
+
+- Ghost-Killer / Drift-Cleaning (Janitor Pattern) (ENTWURF-fest):
+  • Backend-Reconcile: Ein Janitor (Cron/Daemon; Default: alle 5 Minuten; SQL-first konfigurierbar via janitor_interval_seconds) hält SQL sauber.
+    - Er findet “stale” ONLINE-Sessions (radacct open = stop_time IS NULL + radacct.acctupdatetime zu alt) und schließt sie in SQL.
+    - Optionaler Cross-Check: Für stale Sessions darf der Janitor kernel/pppX prüfen (nicht das Panel).
+  • Parameter (SQL-first, MUST):
+    - radius_acct_interim_seconds (Default: 300s; hard caps lokal erzwingen): AAA-Stack setzt Acct-Interim-Interval entsprechend.
+    - stale_threshold_seconds (Default: 900s; typ. ≈ 3 × radius_acct_interim_seconds + kleine Grace; hard caps lokal erzwingen) → “stale”.
+    - janitor_interval_seconds (Default: 300s / 5min; hard caps lokal erzwingen): Takt des periodischen Janitor-Laufs.
+    - Optional 2-Phasen-Logik: erst STALE markieren, erst im nächsten Janitor-Lauf final schließen (um False-Positives zu vermeiden).
+  • Action (MUST):
+    - Wenn SQL “online” aber stale → Session in SQL deterministisch schließen (stop_time setzen; z.B. stop_time=NOW()) + Audit-Event “JANITOR_CLOSED_STALE_SESSION”.
+    - Wenn Kernel-Cross-Check genutzt wird: Kernel=weg ist zusätzliche Evidenz, nicht alleinige Wahrheit.
+
+- IPv4 Tail-Reserve (Notpuffer, Admin-only Release) (ENTWURF-fest):
+  • Norm (MUST):
+    - Zusätzlich zu rand-only (Netz-ID/Broadcast) wird am Ende des IPv4-Hostrange ein Tail-Reserve-Bereich zurückgehalten.
+    - Tail-Reserve ist standardmäßig RESERVED (nicht allocatable), kann aber bei Knappheit Admin-only freigegeben werden (auditpflichtig).
+  • Semantik:
+    - Tail-Reserve ist ein Notfallhebel (Rescue), nicht Normalbetrieb.
+    - Netz-ID/Broadcast bleiben IMMER reserviert und sind niemals “freigebbar”.
+  • Parameter (SQL-first, MUST):
+    - IPV4_TAIL_RESERVE_COUNT (Default: 64) pro Pool/Zone.
+    - Toggle/Flag “IPv4 Tail Reserve Release aktiv” (Admin-only, auditpflichtig).
+
+-  (nur wenn RED):
+  • Button/Toggle “Reserve Release aktivieren” (Admin-only, auditpflichtig)
+    - v4: aktiviert “IPv4 Tail Reserve Release” (Tail-Reserve wird allocatable)
+
+- DoD (MUST):
+  • Determinismus (SoT): fixed_ip/fixed_ipv6 bleiben pro vpn_connection stabil über Reconnects (keine Leases/Random pro Session).
+  • Non-Enumeration: Vergabe zeigt kein Sequenz-/Zählmuster (random Slot/Host-IDs; kein monotones Wachstum).
+  • Quarantäne: revoked Connection blockiert Reuse der IP bis QUARANTINE_DAYS abläuft.
+  • Collision/Retry: künstliche Kollision führt zu retry; kein Duplicate möglich (Constraints greifen).
+  • Exhaustion: bei zu vielen parked/alloc’ed → Hard-Fail mit Reason; kein Fallback in falschen Pool.
+  • Ampel/Counts: FREE/ALLOCATED/PARKED/RESERVED sind nachvollziehbar aus DB + Parametern ableitbar; ONLINE ist separat als Laufzeitwert sichtbar.
+
+
+
+
+=== J) DoD + offene Festzurrungen + Entscheidungen + offene Fragen ===
+
+11) Definition of Done (DoD) – Nachweise für Patch-Reife
+  11.1 IP-Allocator / Quarantäne (MUST)
+    - revoked_at → IP bleibt QUARANTINE_DAYS unvergebbar.
+    - Slot-Allocator ist auditierbar: Vergabe über Random-Start + zyklisches Probing; Ergebnis ist über ip_slot + Reason nachvollziehbar.
+    - Parallelität: keine Doppelvergabe (Unique+TX).
+    - Exhaustion: Hard-Fail + eindeutiger Reason, kein Pool-Fallback.
+    - fixed_ip immutable (kein Write-Path).
+
+  11.2 Gruppen/Pools/Hard-Fails (MUST)
+    - Pool-Mismatch → DENY + DISABLED + Audit.
+    - Admin ist garantiert restricted-immune durch conn_group+Pool.
+    - Promotion/Demotion: neuer Client nötig; Admin-Connections werden sicher beendet/deaktiviert.
+
+  11.3 Connection Rate Limit (MUST)
+    - Normales Surfen/Alltag: keine spürbaren Einschränkungen.
+    - Portscan/Bot-Pattern: zuverlässig gedämpft/blocked.
+    - Logs: ratelimited, kein Disk-Füller.
+    - Admin/Ops: typische Admin Workflows bleiben nutzbar (sonst Parameter/Policy bewusst anpassen).
+    - Legacy: XP-Clients werden nicht ungewollt blockiert.
+
+
+12) “Wasserfest Richtung Patch”: offene Festzurrungen (nur ENTWURF)
+  Damit der ENTWURF patchfähig wird, müssen wir als nächstes festziehen:
+- (Nur falls Revision gewollt): Admin IPv4 Pool Prefix und/oder IPv6 Prefixe bewusst ändern; aktuell sind sie in 3.1/3.2 bereits festgezogen.
+    - Reservierungsregeln im Pool finalisieren (welche IPs sind reserved; SERVICE_NET / ZONE 0 ist separat und kein Teil der Pools).
+    - Kanonische Parameter-Normen:
+      • QUARANTINE_DAYS
+      • CONN_NEW_RATE_PER_SEC
+      • CONN_NEW_BURST
+      • CONN_NEW_LOG_RATE_PER_SEC
+      • (OPTION) CONN_NEW_RATE_ADMIN_MULTIPLIER (Default 1.0)
+
+    - Kanon-Verankerung (wo es später gepatcht wird):
+      • Netz/Pools: B060
+      • Schema/Lifecycle/Allocator: B055 (+ Verweise in B050/B166)
+      • AAA Mismatch DENY: B050
+      • Apply/Reconcile Hard-Fail (Kill + DISABLED + Audit): B166
+      • Anti-Scan Rate Limit: B100
+
+
+ENTWURF-FESTE ENTSCHEIDUNGEN
+
+
+OFFENE FRAGEN
+
+OFFENE FRAGENLISTE (entscheidungsreif), mit Anker + warum + Validierung
+
+(aktuell keine offenen Fragen in diesem Abschnitt)
+=== APPENDIX: Originale NX-Listen-Überschrift (Historie) ===
+
+LUECKENLISTE (nur innerhalb ENTWURF) – NX-Items
+Scope: Diese Items sind KEINE neuen Architekturentscheidungen, sondern fehlende Kanon-Bausteine,
+die sonst später Lücken/Dead-Ends/Policy-Loch verursachen. Bezug: ENTWURF
+
+

@@ -2,11 +2,11 @@ xp-vpn-stack/blocks/B342_POLICY_OUTCOME_REASON_CODES_MATRIX.txt
 ================================================================================
 BLOCK-ID: B342
 TITLE: Reason Registry (Domains + Outcomes) für R_* / R_AUTH_* inkl. Kernel-Prioritäten + Aliases (No Drift)
-VERSION: v2.6
-DATUM: 2026-01-14
+VERSION: v2.7
+DATUM: 2026-01-20
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B050, B150, B280, B285, B310, B340, B341
+REQUIRES: B050, B060, B150, B280, B285, B310, B340, B341
 INFLUENCES: B150, B166, B280, B285, B310, B340, B341, B343
 OWNER-INTENT: Deterministische, supportbare Outcome/Reason-Semantik ohne Architekturkonflikt (Self-Service bleibt möglich).
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
@@ -31,7 +31,7 @@ Hinweis:
   - Effekt (Kernel): **kein Tunnel**
 - OUTCOME=RESTRICT
   - RADIUS: Access-Accept (restricted_effective=true)
-  - Effekt (Kernel): Tunnel steht, aber **Restricted Mode/Walled Garden** greift (nur erlaubte Ziele, v.a. 10.77.0.1)
+  - Effekt (Kernel): Tunnel steht, aber **Restricted Mode/Walled Garden** greift (nur erlaubte Ziele, v.a. Service-DNS 10.77.0.1 + Service-Web/Panel 10.77.0.3; Netz-SoT: B060)
 - OUTCOME=OK
   - RADIUS: Access-Accept
   - Effekt (Kernel): Full Tunnel (normale Nutzung)
@@ -353,6 +353,7 @@ Regeln:
 ================================================================================
 CHANGELOG
 ================================================================================
+- v2.7 (2026-01-20): RESTRICT-Erklärung an 001/002/003 Service-Ziele angepasst (Service-DNS 10.77.0.1 + Service-Web/Panel 10.77.0.3); B060 als Netz-SoT in REQUIRES ergänzt. Keine Änderung an Outcome/Reason-Policy.
 - v2.6 (2026-01-14): Redaktion/Konsistenz: Trunkierung in 2.1 („alles Unbekannte…“) korrigiert; Prioritätenkette in 3) präzisiert (gilt für kernel-wirksame Codes, inkl. SECURITY/OPS, nicht nur „RADIUS-Domain“). Keine Policy-Änderung.
 - v2.5 (2026-01-14): Grundregeln Terminologie-Fix: „Reason-Codes sind kanonische Codes“ (kein „Tokens“). (No semantic change.)
 - v2.4 (2026-01-14): Terminologie-Fix: Reason-Codes werden als „Codes“ bezeichnet (kein „Tokens“), Header-Datum aktualisiert. (No semantic change.)

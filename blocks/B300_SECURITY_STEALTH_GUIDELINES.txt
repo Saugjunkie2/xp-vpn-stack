@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B300_SECURITY_STEALTH_GUIDELINES.txt
 ================================================================================
 BLOCK-ID: B300
 TITLE: Security & Stealth Guidelines
-VERSION: v1.0
-DATUM: 2026-01-06
+VERSION: v1.2
+DATUM: 2026-01-22
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: alle
@@ -12,7 +12,7 @@ OWNER-INTENT: Leitlinien, damit Betrieb stabil und unauffällig bleibt.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
 NOTES:
-- Baseline-Härtung ist nicht optional: IPv6 off, SSH eingeschränkt, minimal services, WAN ping optional/limitiert.
+- Baseline-Härtung ist nicht optional: IPv6 Leak-Control (LEGACY v4-only; ADMIN/MODERN ggf. Dualstack), SSH eingeschränkt, minimal services, WAN ping optional/limitiert.
 - Kein Overengineering (IDS/IPS etc.) in Baseline; Fokus ist robust + verständlich.
 - Regelmäßige Updates/Backups + Log-Retention gegen Disk-Full sind Teil der Security (operational security).
 ================================================================================
@@ -29,12 +29,10 @@ NOTES:
 
 4) RULES MUST
 - WAN: nur UDP 500/4500 + ESP.
-- SSH: bind nur 127.0.0.1 + 10.77.0.1, nft allow nur Admin-Netz.
-- Web: bind nur 10.77.0.1; nft allow user/admin subsets.
-- AdGuard UI/pma: admin-only.
-- Peer isolation: user-user drop.
-- Abuse blocks: SMTP/SMB/NetBIOS drop.
-- IPv6 disabled.
+- SSH: bind nur SERVICE_SSH (10.77.0.5 / fd77:0:0:0::5); nft allow nur Admin-Netz (ADMIN_VPN_NET) (Zone-0 SERVICE).
+- Web: bind nur SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3); nft allow user/admin subsets.
+- Alles andere: no WAN-binds.
+- IPv6: Dual-Stack ist Standard für ADMIN+MODERN (v4+v6 gleichwertig: DNS-Zwang, Full-Tunnel, Policies). LEGACY bleibt IPv4-only. Leak-Control/WAN-Exposure bleibt strikt (keine WAN-binds; nur SERVICE_* + allowlists).
 
 5) OPTIONAL
 - ICMP rate-limit.
@@ -51,5 +49,7 @@ NOTES:
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.2 (2026-01-22): SSH als Zone-0 Service auf SERVICE_SSH (v4+v6) festgezogen; SERVICE_WEB dualstack notiert; IPv6 für ADMIN+MODERN nicht mehr „optional“, sondern gleichwertig zu IPv4 (Policies/DNS-Zwang/Full-Tunnel).
+- v1.1 (2026-01-20): RULES/NOTES auf B060/B010-SoT gezogen (SERVICE_WEB Bind 10.77.0.3; SSH Bind ohne 10.77.0.1; IPv6-Regel als Leak-Control statt „global off“).
 - v1.0: Initial
 ================================================================================

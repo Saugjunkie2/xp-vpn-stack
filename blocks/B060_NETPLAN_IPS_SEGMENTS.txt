@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B060_NETPLAN_IPS_SEGMENTS.txt
 ================================================================================
 BLOCK-ID: B060
 TITLE: Netzplan / IPs / Segmente / Bindings
-VERSION: v1.1
-DATUM: 2026-01-14
+VERSION: v1.6
+DATUM: 2026-01-21
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B010, B020, B040
@@ -12,53 +12,59 @@ OWNER-INTENT: Saubere IP-Architektur als Basis aller Policies.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
 NOTES:
-- Fixe Segmentierung: User 10.77.10.0/24, Admin 10.77.20.0/24, Service-IP 10.77.0.1/32 (lo).
-- Keine zusätzlichen Netze/“Sonderrouten“ ohne Block/Decision – sonst bricht die Policy- und F2B-Logik.
-- IP-Vergabe erfolgt via PPP/IPCP; DNS/Routes werden konsistent über PPP-Push/Server-Policy gesetzt.
+- SoT ist 001/002/003 (nicht „2 Netze + Service-/32“).
+- SERVICE ist ein eigenes Segment (SERVICE_NET) mit mehreren separaten Service-IPs (DNS/Web/NTP/Infra), um Drift/Fehl-Exposure zu vermeiden.
+- LEGACY (XP/Vista) bleibt IPv4-only; ADMIN/MODERN sind Dualstack (IPv4+IPv6).
 ================================================================================
 
 1) ZWECK
-- Definiert IPs, Segmente und bind-Strategie (10.77.0.1/32 auf lo).
+- Definiert das kanonische Netzmodell (Zonen/Segmente) inkl. Service-IPs als feste Anker für Firewall, DNS-Zwang, Panel und Ops.
 
-2) GRENZEN
-- Keine Dienste auf WAN-IP binden (außer IPsec).
-- Keine Vermischung der Netze.
+2) SEGMENTE (SoT)
+2.1 SERVICE (Infra-only, keine Client-Pool-IP)
+- SERVICE_NET_v4: 10.77.0.0/28
+- SERVICE_NET_v6: fd77:0:0:0::/64
 
-3) ABHÄNGIGKEITEN
-- Requires: B010, B020, B040
-- Influences: B100..B150, B200..B230
+Service-IPs (v4/v6):
+- SERVICE_DNS:     10.77.0.1   / fd77:0:0:0::1    (AdGuard DNS + UI, UI später admin-only scoped)
+- SERVICE_RESOLVER: 10.77.0.2  / fd77:0:0:0::2    (Unbound, server-only)
+- SERVICE_WEB:     10.77.0.3   / fd77:0:0:0::3    (Panel/Portal/Blockpage + /diag)
+- SERVICE_NTP:     10.77.0.4   / fd77:0:0:0::4    (NTP für XP-Zeitstabilität)
+- SERVICE_SSH:     10.77.0.5   / fd77:0:0:0::5    (SSH, admin-only Scope; kein USER/RESTRICTED Zugriff)
+- SERVICE_GW_PPP:  10.77.0.10  / fd77:0:0:0::10    (PPP peer/local gateway-Anchor für Legacy-PPP; kein Service-Port-Ziel)
 
-4) INPUTS
-- WAN: ens13 (public IP)
-- Service-IP: 10.77.0.1/32 auf lo
-- User: 10.77.10.0/24
-- Admin: 10.77.20.0/24
+2.2 LEGACY (XP/Vista, L2TP/IPsec)
+- LEGACY_VPN_NET_v4 (Pool): 10.77.16.0/20
+- LEGACY ist IPv4-only (kein IPv6 im Legacy-PPP Pool)
 
-5) OUTPUTS (Bind-Matrix)
-- SSH bind: 127.0.0.1 + 10.77.0.1
-- OpenResty bind: 10.77.0.1:80/443
-- AdGuard DNS: 10.77.0.1:53 (UDP+TCP)
-- AdGuard UI: 10.77.0.1:2000 (nur Admin-Netz via nftables; Bind bleibt 10.77.0.1)
-- Unbound: 127.0.0.1:5335
-- NTP: 10.77.0.1:123 (UDP)
+2.3 ADMIN (Dualstack, IKEv2)
+- ADMIN_VPN_NET_v4 (Pool): 10.77.2.0/24
+- ADMIN_VPN_NET_v6 (Pool): fd77:0:0:2::/64
 
-6) HARTE REGELN (MUST)
-- 10.77.0.1/32 liegt auf lo (immer up).
-- Kein Dienst lauscht auf 0.0.0.0 ohne zwingenden Grund.
+2.4 MODERN (Dualstack, IKEv2)
+- MODERN_VPN_NET_v4 (Pool): 10.77.32.0/20
+- MODERN_VPN_NET_v6 (Pool): fd77:0:0:32::/64
 
-7) OPTIONEN
-- Zusätzliche interne Domains via AdGuard rewrite (vpn.status etc.).
+3) BIND-/SCOPE-IMPLIKATION (Kurz)
+- Alle internen Dienste binden an SERVICE_* (nicht an WAN, nicht an 0.0.0.0).
+- VPN-Clients erreichen Dienste nur über erlaubte Scopes/Ports (nft input allowlists pro SERVICE-IP).
+- DNAT DNS: Client DNS forced to SERVICE_DNS (10.77.0.1 / fd77:0:0:0::1) (B210 details)
+- RESTRICTED forward drop: nur SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3 :443/80) + SERVICE_DNS (10.77.0.1 / fd77:0:0:0::1 :53) + SERVICE_NTP (10.77.0.4 / fd77:0:0:0::4 :123/udp)
+- Blockpage/Panel/diag liegen auf SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3 :443/80), damit „DNS vs Web“ sauber getrennt ist.
+- NTP liegt auf SERVICE_NTP (10.77.0.4), damit Zeitfix auch im Restricted Mode stabil bleibt.
 
-8) FEHLERBILDER
-- Wenn 10.77.0.1 nicht auf lo -> Dienste abhängig von PPP sessions -> instabil.
-
-9) TESTS
-- reboot: 10.77.0.1 existiert vor erster VPN session.
-- port checks: Web nur auf 10.77.0.1.
+4) TESTS
+- Konsistenztest: In allen abhängigen Blöcken tauchen NETZE/Service-IPs exakt wie hier definiert auf.
+- Service-Scope-Test: Kein Dienst lauscht auf WAN oder 0.0.0.0; alle lauschen nur auf SERVICE_*.
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.6 (2026-01-22): DNS-DNAT/Restricted-Forward Ziele explizit dualstack (v4+v6) auf SERVICE_DNS/SERVICE_WEB/SERVICE_NTP referenziert (IPv6 parallel zu IPv4; LEGACY bleibt v4-only).
+- v1.5 (2026-01-21): SERVICE_SSH als Zone-0-Service ergänzt (v4+v6), damit SSH im Service-Netz sauber scoped werden kann.
+- v1.4 (2026-01-20): Added: SERVICE_NET_v6 + VPN_NET_v6 ranges; clarified legacy v4-only.
+- v1.3 (2026-01-20): K1-Konsistenz: SERVICE_NET_v6 auf fd77:0:0:0::/64 normalisiert; ADMIN/MODERN v6 Prefixe auf fd77:0:0:2::/64 bzw. fd77:0:0:3::/64; MODERN_VPN_NET_v4 Pool auf 10.77.32.0/20 korrigiert; SERVICE_GW_PPP (10.77.0.10) explizit als PPP-Gateway-Anchor (kein Service-Port-Ziel) klargestellt.
+- v1.2 (2026-01-20): Netzmodell auf 001/002/003-SoT umgestellt: SERVICE_NET /28 + Service-IPs .1-.4 + LEGACY/ADMIN/MODERN Segmente inkl. Dualstack für ADMIN/MODERN; alte „2 Netze + Service-/32“ Darstellung ersetzt.
 - v1.1 (2026-01-14): Konsistenz/Redaktion: Header-DATUM aktualisiert; ABHÄNGIGKEITEN/Requires an Header angeglichen (B010 ergänzt); Bind-Matrix präzisiert (AdGuard DNS UDP+TCP, UI „admin only“ als nftables-Constraint klargestellt). Keine Architekturänderung.
 - v1.0: Initial
 ================================================================================

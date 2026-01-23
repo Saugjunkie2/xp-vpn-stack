@@ -2,50 +2,87 @@ xp-vpn-stack/blocks/B210_DNS_ENFORCEMENT_DNAT53.txt
 ================================================================================
 BLOCK-ID: B210
 TITLE: DNS Enforcement (DNAT 53)
-VERSION: v1.7
-DATUM: 2026-01-09
+VERSION: v2.3
+DATUM: 2026-01-22
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B150, B200
+REQUIRES: B060, B120, B150, B200, docs/nft_service_ip_scopes.txt
 INFLUENCES: alle
 OWNER-INTENT: "Idiotensicher" DNS egal was User einträgt.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
 NOTES:
-- DNS-Enforcement DNAT’t sämtlichen VPN-DNS (TCP/UDP 53) auf 10.77.0.1, um Bypass zu verhindern.
-- Server-eigener DNS und Admin-Sonderfälle dürfen nicht ungewollt mit umgebogen werden (exakte Match-Kriterien).
-- DNAT muss mit conntrack/xfrm sauber zusammenspielen; Validierung: Client mit „8.8.8.8“ eingetragen darf trotzdem nur AdGuard erreichen.
+- DNS-Enforcement DNAT’t sämtlichen VPN-DNS (UDP+TCP/53) zwangsweise auf SERVICE_DNS.
+  - Ziel v4: 10.77.0.1:53
+  - Ziel v6: fd77:0:0:0::1:53
+- Geltungsbereich (conn_group):
+  - LEGACY: IPv4-only (kein v6 DNS/Traffic), DNAT53 gilt hier nur für v4.
+  - ADMIN/MODERN: Dualstack (v4+v6), DNAT53 MUSS für v4+v6 aktiv sein (sonst DNS-Leak über v6 möglich).
+- DNAT betrifft nur eingehenden VPN-Client-Traffic (Source ∈ VPN-Netze), unabhängig vom Tunneltyp (ppp* vs IKEv2/XFRM).
+  - Server-eigene DNS Queries (OUTPUT) sind nicht Teil dieses DNAT und werden über lokale Resolver-Config gesteuert.
+- Server-eigene DNS (OUTPUT) und interne Service-Upstreams ...(AdGuard → Unbound) dürfen nicht ungewollt mit umgebogen werden:
+  exakte Match-Kriterien müssen deshalb Client-Source-Scope (VPN_Netze) + Excludes (Service-Net/lo/OUTPUT) verwenden.
 ================================================================================
 
 1) ZWECK
-- Redirect TCP/UDP 53 from ppp* to 10.77.0.1:53.
-- Gilt für ALLE ppp* Clients (User/Admin/restricted), damit DNS immer über AdGuardHome läuft.
+- Redirect TCP/UDP 53 von VPN-Clients (Source ∈ VPN-Netze) zwangsweise auf SERVICE_DNS:
+  - IPv4: 10.77.0.1:53 (LEGACY/ADMIN/MODERN)
+  - IPv6 (nur ADMIN/MODERN Dualstack): fd77:0:0:0::1:53
+- Gilt für ALLE VPN-Clients (auch restricted), damit DNS immer über AdGuardHome läuft – unabhängig vom Tunneltyp (ppp* vs IKEv2/XFRM).
 
 2) GRENZEN
 - Aktivieren erst wenn DNS stack stabil (B200).
 - Dieses Enforcement betrifft NUR klassisches DNS über UDP/TCP Port 53.
   - DoH (HTTPS/443), DoT (TCP/853) und DoQ sind NICHT Teil dieses Blocks.
-  - Falls später ein "Total-DNS-Lockdown" gewünscht ist, ist das eine separate Outbound-Policy-Entscheidung (eigener Block/Decision).
-- IPv4-only: Dieser Block beschreibt DNS-Enforcement für IPv4.
-  - Konzept-Policy: IPv6 ist serverseitig deaktiviert/gedroppt (Stealth).
-  - Falls IPv6 jemals aktiviert wird, muss DNS-Enforcement für IPv6 explizit ergänzt werden, sonst potentieller DNS-Leak über v6.
-- DNAT betrifft nur eingehenden Client-Traffic auf iifname "ppp*".
-  - Server-eigene DNS Queries (OUTPUT) sind nicht Teil dieses DNAT und werden über lokale Resolver-Config gesteuert (z.B. Unbound).
+- Falls später ein "Total-DNS-Lockdown" gewünscht ist, ist das eine separate Outbound-Policy-Entscheidung (eigener Block/Decision).
+- Dualstack-Parity (Kanon):
+  - Dieser Block beschreibt DNS-Enforcement via DNAT53 für ADMIN/MODERN sowohl für IPv4 als auch IPv6.
+  - LEGACY bleibt IPv4-only; daher existiert dort kein IPv6 DNS/Traffic, DNAT53 ist für LEGACY nur v4 relevant.
+  - Konsequenz: Bei aktivem IPv6 (ADMIN/MODERN) ist DNAT53 für v6 Pflicht, sonst entsteht ein DNS-Leak-Pfad über IPv6.
+- DNAT betrifft eingehenden VPN-Client-DNS-Traffic (UDP+TCP/53) unabhängig vom Tunneltyp:
+  - LEGACY kommt typischerweise über ppp* (IPv4-only).
+  - ADMIN/MODERN kann über IKEv2/XFRM/anderen Tunnel laufen (Dualstack).
+- Match-Kriterium ist daher NICHT “Interface-Name”, sondern “Client-Source-Scope (VPN-Netze)”:
+  - IPv4: Source ∈ {LEGACY_VPN_NET_v4, ADMIN_VPN_NET_v4, MODERN_VPN_NET_v4}
+  - IPv6: Source ∈ {ADMIN_VPN_NET_v6, MODERN_VPN_NET_v6} (LEGACY bleibt v4-only)
+- Server-eigene DNS Queries (OUTPUT) sind nicht Teil dieses DNAT und werden über lokale Resolver-Config gesteuert.
+- Guard gegen “mit-umbiegen” von Server/Services erfolgt über Source-Scope (VPN-Netze) + explizite Excludes (Service-Net/lo), nicht über “ppp*”.
 
 3) ABHÄNGIGKEITEN
 - Requires: B200, B120, B150, docs/nft_service_ip_scopes.txt
 
-4) INPUTS
-- nft nat prerouting for interfaces ppp*
+4.1) NFTABLES (Kanon-Regelblöcke, konzeptionell; inet/nat)
+Ziel:
+- VPN-Clients (Source ∈ VPN-Netze): UDP/TCP 53 IMMER auf SERVICE_DNS umbiegen (tunnel-agnostisch):
+  - IPv4 -> 10.77.0.1:53 (LEGACY/ADMIN/MODERN)
+  - IPv6 -> fd77:0:0:0::1:53 (nur ADMIN/MODERN Dualstack; LEGACY bleibt v4-only)
+
+Kanon-Regelblock (nftables):
+- table inet nat
+- chain prerouting { type nat hook prerouting priority dstnat; }
+    - meta l4proto { udp, tcp } th dport 53 meta nfproto ipv4 ip saddr { LEGACY_VPN_NET_v4, ADMIN_VPN_NET_v4, MODERN_VPN_NET_v4 } dnat to 10.77.0.1:53
+    - meta l4proto { udp, tcp } th dport 53 meta nfproto ipv6 ip6 saddr { ADMIN_VPN_NET_v6, MODERN_VPN_NET_v6 } dnat to [fd77:0:0:0::1]:53
+
+Scope/Noise-Guard (MUST):
+- Match basiert auf Client-Source-Scope (VPN-Netze), nicht auf iifname:
+  • verhindert Drift zwischen Tunneltypen (ppp* vs IKEv2/XFRM).
+- Excludes:
+  • Service-Net (SERVICE_NET v4/v6) darf nicht als “Client” gematcht werden.
+  • Local OUTPUT bleibt getrennt (Server-DNS/Upstreams werden via Resolver-Config gesteuert, nicht via DNAT).
+- Nach DNAT ist es lokales Ziel (SERVICE_NET) => Enforcement liegt im filter input (B150 + docs/nft_service_ip_scopes.txt).
+
+WICHTIG:
+- Post-DNAT greift SERVICE_NET Input-Scope aus docs/nft_service_ip_scopes.txt (Least-Privilege).
+- Restricted Allowlist (B150) muss DNS (tcp/udp 53) weiterhin erlauben, sonst bricht DNS-Enforcement im Restricted Mode.
 
 5) OUTPUTS
 - forced DNS
-- Empfehlung (Kanon): Server nutzt Unbound direkt als Resolver (127.0.0.1:5335) statt AdGuard, um Abhängigkeiten/Loops zu minimieren; Client-DNS bleibt via DNAT immer AdGuard.
+- Empfehlung (Kanon): Server nutzt Unbound direkt als Resolver (SERVICE_RESOLVER 10.77.0.2:53) statt AdGuard, um Abhängigkeiten/Loops zu minimieren; Client-DNS bleibt via DNAT immer AdGuard (SERVICE_DNS 10.77.0.1:53).
 
 6) MUST (wenn aktiv)
 - Both UDP and TCP 53
-- Hook/Order: nft nat prerouting (DNAT) auf iifname "ppp*" muss vor filter/forward Enforcement greifen.
-- Scope Klarstellung: DNAT betrifft nur eingehenden Client-Traffic auf iifname "ppp*". Server-eigene DNS Queries (OUTPUT) sind nicht Teil dieses DNAT und werden ueber lokale Resolver-Config gesteuert (z.B. resolv.conf -> 127.0.0.1/Unbound/AdGuard).
+- Hook/Order: nft nat prerouting (DNAT) auf Client-Source-Scope (VPN-Netze) muss vor filter/input Enforcement greifen.
+- Scope Klarstellung: DNAT betrifft nur eingehenden VPN-Client-DNS-Traffic (Source ∈ VPN-Netze); Server-DNS (OUTPUT) wird via lokaler Resolver-Konfig gesteuert (z.B. resolv.conf -> 10.77.0.2/Unbound).
 - WICHTIG (Pfad nach DNAT):
   - Nach DNAT ist dst=10.77.0.1:53 => Traffic läuft über nftables filter input (lokales Ziel), nicht über forward.
 - Daher MUSS Restricted Allowlist im input (B150 + docs/nft_service_ip_scopes.txt) explizit UDP+TCP 53 zu 10.77.0.1 erlauben, sonst bricht DNS-Enforcement (insbesondere im Restricted Mode).
@@ -60,7 +97,8 @@ NOTES:
 
 8) FEHLERBILDER
 - Some apps use DoH -> not covered by DNS enforcement (later policy decision).
-- IPv6: Dieser Block ist IPv4-only. Konzept-Policy: IPv6 ist serverseitig deaktiviert/gedroppt (Stealth). Falls IPv6 jemals aktiviert wird, muss DNS-Enforcement fuer IPv6 explizit ergaenzt werden (oder IPv6 DNS/Traffic generell droppen), sonst potentieller DNS-Leak ueber v6.
+- IPv6 DNS-Leak (nur wenn falsch konfiguriert): Wenn DNAT53 nur für v4 aktiv ist, können Dualstack-Clients (ADMIN/MODERN) DNS über IPv6 bypassen.
+  Erwartung im Kanon: DNAT53 v4 + DNAT53 v6 sind aktiv und verifiziert (siehe Tests).
 - MTU/Fragmentierung/EDNS0: grosse DNS-Antworten droppen (z.B. DNSSEC/EDNS0) -> DNS wirkt "kaputt", obwohl DNAT korrekt ist. Dann MTU/MSS/Fragmentation prüfen (B090 Kontext).
 
 9) TESTS
@@ -72,10 +110,17 @@ NOTES:
 - Optional Counter-Test (wenn Option B aktiv):
   - UDP/53 Counter steigt bei DNS-Queries.
   - TCP/53 Counter steigt bei TCP-DNS-Fallback.
+- IPv6 DNS Test (ADMIN/MODERN): Client setzt IPv6 DNS (z.B. 2001:4860:4860::8888) -> Traffic wird dennoch zu fd77:0:0:0::1:53 umgebogen.
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v2.3 (2026-01-22): Konsistenz-Fix: verbliebene ppp*-Scope-Reste entfernt (NOTES + 4.1 Ziel/Beispielregeln + 6 MUST Scope-Klarstellung). Keine Intent-Änderung: DNS-Enforcement bleibt tunnel-agnostisch über VPN-Source-Scope.
+- v2.2 (2026-01-22): Kanon-Fix: DNS-Enforcement nicht mehr ppp*-gebunden, sondern tunnel-agnostisch über VPN-Source-Netze (IPv4 + IPv6 für ADMIN/MODERN); Hook/Order + Noise-Guard entsprechend angepasst.
+- v2.1 (2026-01-21): Kanon-Update: DNS-Enforcement DNAT53 ist für ADMIN/MODERN dualstack (v4+v6) verpflichtend; v4-only/„IPv6 droppen“ Hinweise entfernt/überschrieben; Tests auf v6-DNS-Leak-Guard aktualisiert.
+- v2.0 (2026-01-21): Konsistenz-Fix: NOTES auf Dualstack-Realität angehoben (ADMIN/MODERN DNS-Enforcement via DNAT53 auch für IPv6 -> fd77:0:0:0::1; LEGACY bleibt v4-only). Keine Regel-Intention geändert, nur Drift entfernt.
+- v1.9 (2026-01-20): Symbol-Kanon: SERVICE_UNBOUND -> SERVICE_RESOLVER für 10.77.0.2:53 (server-only) konsistent zu B060 v1.4 + docs/nft_service_ip_scopes.
+- v1.8 (2026-01-20): Konsistenz zu SERVICE_* SoT: Server-Resolver auf SERVICE_UNBOUND 10.77.0.2:53 aktualisiert (statt 127.0.0.1:5335); NOTES/MUST entsprechend angepasst. IPv6-Policy korrigiert: B210 bleibt DNAT-v4, IPv6 DNS-Enforcement ist NX-04 (Leak-Risiko + Leak-Guard Test ergänzt). Header REQUIRES auf B060/B120/docs/nft_service_ip_scopes.txt erweitert.
 - v1.7 (2026-01-09): Scope/Grenzen präzisiert (nur UDP/TCP 53; DoH/DoT/DoQ out-of-scope; IPv4-only + IPv6 Policy klar); OPTIONAL Option B Counters (no logs) konkretisiert; Tests um DoH-Negativtest + optional Counter-Test ergänzt; MTU/EDNS0 Randfall ergänzt.
 - v1.6 (2026-01-07): T06 Referenzen entfernt/ersetzt durch docs/nft_service_ip_scopes.txt (Dependencies + MUST Input-Allowlist Bezug). Keine Logikänderung.
 - v1.5: Pfadpräzisierung ergänzt: DNS nach DNAT läuft über filter input (dst=10.77.0.1:53). Deshalb muss Restricted Allowlist im input (B150/T06) UDP+TCP 53 zu 10.77.0.1 erlauben; Tests um Restricted/Input-Fall erweitert; T06 als Dependency ergänzt.

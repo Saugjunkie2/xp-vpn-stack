@@ -12,8 +12,8 @@ OWNER-INTENT: Server-IP nicht auf Blacklists landen lassen.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
 NOTES:
-- Reputation-Schutz ist Pflicht: SMTP (25/465/587) sowie SMB/NetBIOS-Outbound werden für User blockiert.
-- Admin-Netz kann optional anders behandelt werden, aber User-Netz bekommt keine „Mailserver“-Freiheit.
+- Reputation-Schutz ist Pflicht (Baseline-Security, F6): SMTP (25/465/587) sowie SMB/NetBIOS-Outbound werden für ALLE conn_groups geblockt (inkl. ADMIN/MODERN/LEGACY).
+- Dualstack-Parity (F2): Outbound-Abuse-Blocks gelten gleichwertig für IPv4 UND IPv6, damit IPv6 kein Bypass ist (auch wenn IPv6-Egress via NAT66 läuft).
 - Implementiere Blocks im Forward-Pfad vor NAT und logge nur rate-limited, sonst Disk-Full-Risiko.
 ================================================================================
 
@@ -21,7 +21,7 @@ NOTES:
 - XP clients may be infected -> block common abuse ports.
 
 2) GRENZEN
-- Diese Regeln gelten mindestens für User-Netz; Admin nach Policy.
+- Diese Regeln gelten als Baseline-Security für alle conn_groups (LEGACY/MODERN/ADMIN); keine Admin-Exception im Kanon (F6).
 
 3) ABHÄNGIGKEITEN
 - Requires: B120
@@ -46,7 +46,8 @@ NOTES:
 - Abuse report from hoster -> check if blocks bypassed or admin net compromised.
 
 9) TESTS
-- From client: telnet/smtp connect fails, smb fails.
+- From client (IPv4): telnet/smtp connect fails, smb fails.
+- From client (IPv6, Dualstack): smtp (25/465/587) und smb/netbios outbound fail (kein IPv6-Bypass).
 
 ================================================================================
 CHANGELOG

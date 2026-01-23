@@ -1,13 +1,18 @@
 xp-vpn-stack/02_GLOSSAR.txt
 ================================================================================
 TITLE: Glossar (kanonische Begriffe)
-VERSION: v1.2
-DATUM: 2026-01-14
+VERSION: v1.21
+DATUM: 2026-01-23
 STATUS: ACCEPTED
 OWNER-INTENT: Single Source of Truth für Terminologie; verhindert Drift bei UI-/DB-/Policy-Begriffen.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 ================================================================================
-
+HINWEIS ZUR HYGIENE (K2):
+- Dieses Glossar ist SoT für Begriffe/Benennungen.
+- Einträge können enthalten:
+  • Definitionen (Begriff → Bedeutung)
+  • Terminologie-Normen (MUST) als Drift-Guard (nur Benennung/Abgrenzung)
+- Sobald ein Eintrag konkrete Schema-Feldnamen/Defaults/TTL enthält, muss er auf das bindende SoT verweisen (z.B. B055, B050). Ohne Referenz gilt: ref-only, nicht als alleinige Norm behandeln.
 ================================================================================
 GLOSSAR / BEGRIFFE
 ================================================================================
@@ -17,10 +22,22 @@ Accounting: Protokollierung von Sessions (Start/Stop/Bytes/IP); Grundlage für Q
 Accounting Collector: Dienst/Job der Kernel-Counter (pro pppX) periodisch liest und Deltas batchweise in SQL schreibt.
 AdGuardHome: DNS Filter/Blocker; liefert "Custom IP" für Blockpage; DNS-Endpunkt für DNS-Zwang (10.77.0.1:53).
 Apply / Policy Apply: Aktives Durchsetzen der Policy für eine Verbindung (tc + nft sets) auf Basis des SQL-Truth.
+Settings/Parameter (SQL-first): Policy-Parameter sind SQL-SoT (keine Magic Numbers in Code/Configs). Kanonischer Contract: B057; Schema-SoT: B055.
+settings_catalog: Maschinenlesbarer Settings-Contract (Key/Typ/Range/Fail-Verhalten/Override-Regeln). Jeder Key MUSS im Katalog existieren. (SoT: B055; Kanon: B057)
+settings_global: Settings-Scope „GLOBAL“ (Baseline/Default). UNIQUE(key). (SoT: B055; Kanon: B057)
+settings_customer: Settings-Scope „CUSTOMER“ (Override pro customer_id, nur wenn allowed_override_scope das erlaubt). UNIQUE(customer_id,key). (SoT: B055; Kanon: B057)
+settings_connection: Settings-Scope „CONNECTION“ (Override pro vpn_connection_id, nur wenn allowed_override_scope das erlaubt). UNIQUE(vpn_connection_id,key). (SoT: B055; Kanon: B057)
+effective_value: Deterministisch berechneter Settings-Wert nach Resolution Order (CONNECTION > CUSTOMER > GLOBAL) inkl. Fallback-Regeln. (Kanon: B057)
+effective_source: Quelle des effective_value ∈ { CONNECTION, CUSTOMER, GLOBAL, FAILSAFE_HARDCAP, FAIL_CLOSED }. Muss in /diag sichtbar sein. (Kanon: B057)
+fail_class: Settings-Katalog-Attribut, das Missing/Invalid Reaktion normiert: FAIL_CLOSED oder FAIL_SAFE_HARDCAP (tighten-only). (Kanon: B057)
+allowed_override_scope: Whitelist-Attribut im settings_catalog: { NONE, CUSTOMER, CONNECTION, BOTH }. Writes außerhalb der Whitelist werden Hard-Fail abgelehnt + Audit. (Kanon: B057)
+policy_direction: Settings-Katalog-Attribut: { TIGHTEN_ONLY, RELAXES_ACCESS }. Fallbacks sind nur erlaubt, wenn FAIL_SAFE_HARDCAP + TIGHTEN_ONLY. (Kanon: B057)
+Missing (Settings): Kein Eintrag vorhanden (für betrachteten Scope) oder kein globaler Default existiert. (Kanon: B057)
+Invalid (Settings): Eintrag vorhanden, aber verletzt type/range/validator aus settings_catalog. Gilt als Policy Corruption; deterministisch behandelt + Audit/Health. (Kanon: B057)
 CA: Certificate Authority (Root/Intermediate für MITM).
 Calling-Station-ID: RADIUS Attribut (31), das je nach NAS einen Identifier oder die Peer-IP enthalten kann. Im Fail2ban-Kontext wird es als SrcIP genutzt, aber nur wenn es als IPv4/IPv6 parsebar ist; sonst SrcIP=NA (kein Ban).
 Claim: Zuordnung einer PREPROVISIONED VPN-Connection zu customer_id per claim_token.
-claim_deadline: Hard-Stop gegen „ewige Leichen“. Standardbetrieb: IMMER gesetzt (180 Tage ab Provisioning/Erstellung). Wenn now > claim_deadline und weiterhin UNCLAIMED -> status=DISABLED (HARD, kein VPN/kein Panel). Admin kann per „Deadline verlängern“ claim_deadline = NOW()+180d neu setzen.
+claim_deadline: Hard-Stop gegen „ewige Leichen“. Standardbetrieb: IMMER gesetzt (180 Tage ab Provisioning/Erstellung). Wenn now > claim_deadline und weiterhin UNCLAIMED -> status=DISABLED (HARD, kein VPN/kein Panel). Admin kann per „Deadline verlängern“ claim_deadline = NOW()+180d neu setzen. (Schema/Norm: B055.vpn_connections.claim_deadline)
 claim_token_hash: Hash des claim_token in der DB (claim_token liegt nur auf dem Gerät/Beileger und wird ausschließlich im Panel zur Claim-Eingabe verwendet; NICHT für VPN-Login).
 Connection / VPN-Connection (UI-Begriff: VPN-Client): Pro Gerät genau eine Verbindungseinheit mit fester IP, Limits, Status und einem zugehörigen AAA-Subaccount (VPN-Login-Credentials). Nicht zu verwechseln mit Customer (Panel-Account).
 Customer: Kundenkonto im Panel/SQL, kann mehrere VPN-Connections besitzen (1 Kunde -> n Verbindungen).
@@ -30,7 +47,53 @@ display_name: Optionaler Anzeigename für das Panel (UI-only; max 40 Zeichen; Be
 VPN-Client (UI): Umgangssprachlicher/UI-Begriff für eine VPN-Connection (pro Gerät).
 Subaccount (AAA): Technischer VPN-Login-Account der VPN-Connection (pro Gerät). Besteht aus subaccount_login (Username) + subaccount_nt_hash (NT-Hash / RADIUS NT-Password; MSCHAPv2).
 subaccount_login: Systemgenerierter PPP/RADIUS Username (pro Gerät; AAA-Identität). Format: vpn_ + 16 Zeichen Base32 (a-z2-7), Regex ^vpn_[a-z2-7]{16}$. Random/non-enumerable; niemals user-supplied; im Panel sichtbar aber strikt read-only.
+connection_login (KANON): Kanonischer Begriff für die VPN-Login-Identität (AAA).
+- Gleichheit (MUST): connection_login == PPP Username (RADIUS User-Name) == subaccount_login (DB-Feldname). (Schema: B055.vpn_connections.subaccount_login; AAA-Drift-Guard: B050 §6)
+- Drift-Guard: Begriffe wie „VPN-Login“, „Connection-Login“, „Subaccount-User“ dürfen nicht wechselnd genutzt werden; kanonisch ist connection_login.
+conn_group: Kanonische Connection-Klassifikation (SQL-first) pro VPN-Connection (pro Gerät).
+- Werte: LEGACY | MODERN | ADMIN
+- SoT: vpn_connections.conn_group (B055), NOT NULL; niemals aus IP-Ranges “ableiten”.
+- Zweck: Scope/Policy/Diag/Panel-Konsistenz (z.B. Admin-Views/Netz-Scope, /diag Anzeige, Filter/UX).
+POOL_V4_LEGACY / POOL_V4_MODERN / POOL_V4_ADMIN: Symbolische IPv4-Pool-Keys (SQL-first), die aus conn_group deterministisch abgeleitet werden (B058).
+- Zweck: Scope/Policy/Diag/Panel-Konsistenz (z.B. Admin-Views/Netz-Scope, /diag Anzeige, Filter/UX).
+Promotion (User → Admin): Provisioning-Mechanik für Admin-Zugriff.
+- Norm: Beförderung ist eine NEUE vpn_connection (neuer Client) mit conn_group=ADMIN; bestehende LEGACY/MODERN Connections werden NICHT “hochgestuft”.
+- IP: aus Admin-Pool (B060); conn_group=ADMIN ist SoT, niemals aus IP ableiten.
+Demotion (Admin → User): Rückbau der Admin-Zugriffe
+- Norm: Alle ADMIN-Connections eines Accounts werden deaktiviert (status/effective_state=DISABLED + disabled_at) und für Quarantäne/Entzug markiert (revoked_at).
+- Optional: Hardcut/Session-Kill als sofortiges Ende laufender Sessions (Operability/Security).
+effective_state: Kanonischer Laufzeit-/Diagnosebegriff (z.B. /diag), der den wirksamen Verbindungszustand beschreibt.
+- Drift-Guard: Für den Lifecycle PREPROVISIONED|CLAIMED|DISABLED ist das kanonische DB-Feld vpn_connections.status (B055). Der Begriff „effective_state“ darf als Anzeige-/Log-Begriff genutzt werden, muss aber auf status referenzieren (kein verstecktes zweites SoT-Feld).
+disabled_at: Timestamp, der gesetzt wird, wenn eine Connection in DISABLED übergeht (B055; Thema D).
+revoked_at: Timestamp, der gesetzt wird, wenn eine Connection entzogen/„revoked“ wird (B055; Thema D); dient u.a. als Quarantäne-/Entzug-Markierung.
+quarantined: Zustand/Property einer (ehemals genutzten) IP/Allocation, die nach Entzug (revoked_at) bis zum Ablauf des Quarantänefensters nicht neu vergeben werden darf (Thema C / B064).
+QUARANTINE_DAYS: Kanonischer Settings-Key (SQL-first, B057), Dauer des Quarantänefensters: quarantined, wenn revoked_at IS NOT NULL und now < revoked_at + QUARANTINE_DAYS (Thema C / B064).
+ip_slot (random allocation): Norm aus Thema C (B064): Slot-Vergabe erfolgt random via CSPRNG (Anti-Order/Anti-Enumeration); Mapping ip_slot→fixed_ip/fixed_ipv6 bleibt deterministisch.
+POOL_V4_LEGACY / POOL_V4_MODERN / POOL_V4_ADMIN: Symbolische IPv4-Pool-Keys (SQL-first)
+- Zweck: Auswahl des IP-Pools in einer DB-gesteuerten IPAM/Allocator-Logik (kein Hardcoding, keine Range-Inference).
+POOL_V6_MODERN / POOL_V6_ADMIN: Symbolische IPv6-Pool-Keys (SQL-first), analog zu IPv4 (B058). LEGACY hat per Definition kein IPv6 (v4_only).
 subaccount_nt_hash: PPP/RADIUS Secret als NT-Hash (pro Gerät; im Panel änderbar per „Passwort setzen/rotieren“). SoT: NT-Hash (MSCHAPv2 / RADIUS NT-Password), kein Klartext als SoT.
+ip_slot: Deterministische Slot-ID (INTEGER) als Single Source of Truth für IP-Zuordnung pro vpn_connection (B061).
+- Bedeutung: ip_slot ist die einzige „Zahl“, aus der fixed_ip (IPv4) und fixed_ipv6 (IPv6) materialisiert werden (keine Random-Leases).
+- Range: 1..N (N = nutzbare Host-Kapazität des IPv4 Pools; z.B. /24 => 254, /20 => 4094).
+- Uniqueness: innerhalb eines IPv4-Pools (POOL_V4_*) muss (pool_id, ip_slot) eindeutig sein, solange Verbindung nicht revoked ist (B061).
+v6_addr_policy: IPv6-Adress-Policy pro vpn_connection (SQL-first; B061).
+- Werte: NONE | FIXED_SQL
+- Regel: LEGACY = NONE (IPv4-only). ADMIN/MODERN = FIXED_SQL (Dualstack), sofern Pool-V6 verfügbar (B060/B061).
+fixed_ip: Materialisierte IPv4-Adresse (B061).
+- SoT ist NICHT fixed_ip selbst, sondern ip_slot + Pool-v4 Prefix (deterministische Ableitung).
+- NORM (MUST): fixed_ip ist NICHT optional und NICHT frei editierbar. Sie ist 1:1 an Subaccount/VPN-Connection gebunden (stabil nach CLAIM).
+fixed_ipv6: Materialisierte IPv6-Adresse (nur wenn v6_addr_policy=FIXED_SQL) (B061).
+- SoT ist NICHT fixed_ipv6 selbst, sondern ip_slot + Pool-v6 Prefix (deterministische Ableitung).
+- NORM (MUST): fixed_ipv6 ist NICHT optional (für Dualstack conn_groups) und NICHT frei editierbar. Sie ist 1:1 an Subaccount/VPN-Connection gebunden (stabil nach CLAIM).
+Tail-Reserve: Notpuffer am Ende des Slot-Raums eines Pools (B061).
+- Zweck: Deadlock-/Exhaustion-Resilienz + Break-Glass/Recovery (z.B. ADMIN oder Emergency Override).
+- Wichtig: Tail-Reserve zählt nicht als „allocatable“ für normale User-Allocations.
+IP Ampel (Panel-Stats): Panel-Anzeige zur Pool-Gesundheit auf Basis freier Slots (B061).
+- Farben: GREEN/YELLOW/RED basierend auf Settings-Thresholds (SQL-first).
+- OPSEC: Panel zeigt Aggregationen (free/used/allocatable), keine per-User IP-Listen.
+ONLINE (Panel-Stats): Online-Definition für Panel/Stats (B061).
+- SoT: RADIUS Accounting (radacct) + active_session_locks (B055/B165) — strongSwan Status ist nur Debug-Hint, nicht Truth.
 MSCHAPv2: PPP-Authentifizierungsmethode (XP-tauglich). RADIUS validiert per MSCHAPv2 gegen NT-Hash (NT-Password).
 NT-Hash / NT-Password: NT-Hash (MD4 über UTF-16LE Passwort). Wird in RADIUS als „NT-Password“ genutzt (für MSCHAPv2).
 csrf_token: Webpanel-internes Schutz-Token für state-changing Requests; niemals gleichbedeutend mit claim_token.
@@ -57,6 +120,13 @@ Terminologie-Regel (MUST): Das Wort „Token“ darf im gesamten Konzept nicht u
 Zulässig sind nur: claim_token (Claim), csrf_token (Webpanel), session_token (Webpanel). „Token“ allein ist verboten.
 Hinweis: Verify-Code (email_verify_code) ist bewusst ein „Code“ und kein Token-Begriff.
 Decision Record: Textdatei im decisions/ Ordner, die eine bindende Architekturentscheidung festhält (D001..D012).
+- NAT66 / Masquerade (IPv6):
+  IPv6-Äquivalent zu NAT44/MASQUERADE. ADMIN/MODERN Dualstack-Clients egressen über NAT66 (Prinzip: IPv6 wird wie IPv4 behandelt; Policy bleibt gleich, Umsetzung family-spezifisch in nftables).
+- SERVICE_SSH:
+  Service-IP im SERVICE_NET für SSH (10.77.0.5 / fd77:0:0:0::5). Scope: ADMIN ONLY. Kein WAN-Bind, kein “offenes” 0.0.0.0/::.
+- RESTRICTED Reason / ADMIN-Exemption:
+  RESTRICTED wird technisch über restricted_v4/restricted_v6 Sets erzwungen.
+  Für ADMIN gilt: quota/expiry/unclaimed_overdue/kundenpolicies lösen RESTRICTED nicht aus; nur MANUAL/Not-Aus kann ADMIN restricten.
 DPD: Dead Peer Detection (strongSwan).
 ESP: Encapsulating Security Payload (IPsec, Proto 50).
 Expiry: Ablaufdatum einer Verbindung; nach Expiry kann DISABLED oder Restricted gesetzt werden (je Policy).
@@ -93,13 +163,39 @@ PPP_IF: Name des PPP-Interfaces (pppX), das zur Session gehört (Plausibilitäts
 START_TS: Prozess-Startzeitstempel (z.B. aus /proc/<pid>/stat), um PID-Reuse nach Crash/Reboot auszuschließen (Plausibilitätscheck MUST).
 PSK: Pre-Shared Key (IPsec Shared Secret).
 QoS/Shaping: Bandbreitensteuerung, Latenzschutz (tc, CAKE/fq_codel).
+Exposure-by-Binding: Primärmodell für WAN-Exposure: „OPEN“ entsteht nur, wenn ein Dienst absichtlich an WAN/Public-IP/0.0.0.0/:: bindet. nftables/WAN-Stealth ist optionaler Zusatzschutz, aber nicht die primäre Exposure-Methode.
+Binding-first: Synonym/Schreibweise für Exposure-by-Binding (Norm: diese Begriffe meinen dasselbe; keine alternativen Synonyme ohne Glossar-Definition verwenden).
+WAN-Stealth: Optionaler Zusatzschutz per nftables (z.B. WAN-IF Input default DROP außer VPN-Ports + established/related). Darf Exposure-by-Binding nicht ersetzen, sondern nur ergänzen.
+Server-Sphäre: Policy-Domäne für den Host selbst (INPUT/OUTPUT): Dienste/Prozesse/Localhost/Service-IP; hier gelten Host-Sicherheitsregeln unabhängig von Client-Traffic.
+Client-Bubble: Policy-Domäne für Client-Traffic (FORWARD + NAT PREROUTING/POSTROUTING; bei IPsec/IKEv2 zusätzlich XFRM-Pfade). Default-Deny bezieht sich primär auf diese Domäne (Client-Policies), nicht als pauschaler Host-DROP.
+Nicht OPEN (WAN-DoD): Kanonisches DoD-Kriterium für WAN-Exposure: Von außen dürfen nur VPN-Endpunkte „OPEN“ sein; alle anderen Ports müssen „nicht OPEN“ sein (CLOSED oder FILTERED sind beide ok).
+Gate-0 (Tunnel): Zugangsgate auf Tunnel/Infra-Ebene (PSK für LEGACY IKEv1/L2TP; Server-Zertifikat/Trust (Public CA; konkret: Let’s Encrypt) für IKEv2 ADMIN/MODERN); ist niemals Identität/Policy-Key.
+Server-Zertifikat (IKEv2 Gate-0): X.509 Server-Zertifikat (Public CA; konkret: Let’s Encrypt). Client validiert FQDN/Hostname + Chain gegen Trust Store oder optional per Pinning. Kein Client-Zertifikat erforderlich.
+Gate-1 (Identität): Identitäts-/Policy-Gate (Username/Password via connection_login; Enforcement via RADIUS/EAP/PPP); PSK zählt hier nicht.
+EAP-MSCHAPv2: EAP AuthN Methode, die MSCHAPv2/NT-Hash nutzt (User/Pass Prinzip bleibt identisch zu PPP/MSCHAPv2); relevant für IKEv2 AuthN (ADMIN/MODERN).
+ipsec.secrets: File-SoT für IPsec Shared Secrets (PSK); root-only; PSK darf niemals in SQL/Panel/Logs auftauchen (nur generische Mismatch-Reasons).
 Quota: Datenbudget (total/used); bei Erreichen wird Restricted Mode erzwungen (statt Reject).
 rDNS/PTR: Reverse DNS Eintrag beim Provider.
 Reconcile: Periodischer Abgleich (<=5min), der driftfrei den tatsächlichen Enforcement-State (nft sets/tc) aus SQL/Runtime wiederherstellt; deterministisch (FLUSH+REBUILD).
-Restricted Mode: Zustand, in dem Internet gesperrt ist und nur erlaubte Ziele/Dienste erreichbar sind (Walled Garden).
-restricted_effective: Policy-Flag (Resultat aus Quota/Expiry/Manual/UNCLAIMED_OVERDUE), das den Restricted Mode (Walled Garden) erzwingt.
+Restricted Mode: Zustand, in dem Internet gesperrt ist und nur erlaubte Ziele/Dienste erreichbar sind (Walled Garden) – gilt für IPv4+IPv6 (v4/v6 parity).
+restricted_effective: Policy-Flag (Resultat) das Restricted erzwingt. Regeln:
+- Für alle conn_groups: manual_restricted -> restricted_effective=true (Not-Aus).
+- Für conn_group != ADMIN (USER/LEGACY/MODERN-User): Quota/Expiry/Restricted-Policy/UNCLAIMED_OVERDUE können restricted_effective=true setzen.
+- Für conn_group = ADMIN: restricted_effective wird *nur* durch manual_restricted gesetzt (Quota/Expiry/UNCLAIMED_OVERDUE werden ignoriert).
 restricted_reason: Klarer Grundcode/Grundtext, warum restricted aktiv ist (Support/UX/Logs).
-Service-IP: 10.77.0.1/32 auf lo, interner Dienst-Anker (DNS/Panel/Portal/NTP).
+SERVICE_DNS: Service-IP für DNS (AdGuard). v4=10.77.0.1, v6=fd77:0:0:0::1.
+SERVICE_RESOLVER: Server-only Resolver (Unbound). v4=10.77.0.2, v6=fd77:0:0:0::2.
+SERVICE_WEB: Web/Panel/Portal/Blockpage + /diag. v4=10.77.0.3, v6=fd77:0:0:0::3.
+SERVICE_NTP: NTP-Service für Zeitstabilität (XP). v4=10.77.0.4, v6=fd77:0:0:0::4.
+SERVICE_SSH: SSH-Service (admin-only scoped). v4=10.77.0.5, v6=fd77:0:0:0::5.
+SERVICE_GW_PPP: PPP gateway/peer Anchor (Legacy-PPP). v4=10.77.0.10, v6=fd77:0:0:0::10. (kein Service-Port-Ziel).
+Anti-Scan (nft): Schutzmechanik gegen Scans/Floods via nftables (insb. conntrack ct state NEW rate-limited + bounded Logging), damit WAN/Forward nicht durch “NEW floods” oder Log-DoS kollabieren (Bezug: B063/B057).
+conntrack NEW Flood: Last-/DoS-Muster mit sehr vielen NEW-Flows (oft UDP), das conntrack/CPU/Logs belasten kann; muss früh (nft) gedämpft werden (Bezug: B063).
+CONN_NEW_RATE_PER_SEC: Settings-Key (SQL-first, B057) — harte Obergrenze für ct state NEW pro Sekunde (Anti-Scan/Flood-Guard).
+CONN_NEW_BURST: Settings-Key (SQL-first, B057) — Burst-Reserve für ct state NEW (Anti-Scan/Flood-Guard).
+CONN_NEW_LOG_RATE_PER_SEC: Settings-Key (SQL-first, B057) — Logging-Sampling/Ratelimit für NEW-Flood/Scan-Events (bounded Logs).
+CONN_NEW_RATE_ADMIN_MULTIPLIER: (OPTION) Settings-Key (SQL-first, B057) — Multiplikator für Admin-Netz im NEW-RateLimit (nur wenn explizit aktiviert).
+SERVICE_GW_PPP: 10.77.0.10 (PPP peer/local gateway-Anchor; kein Service-Port-Ziel).
 Simultaneous-Use=1 (SimUse): Pro Subaccount nur eine aktive Session; harte Regel (pro Gerät genau eine Session).
 Spool (durable spool): Lokale Ablage für Accounting-Deltas, falls DB down ist; wird später nachgeschrieben.
 Safety Ceilings (lokale Hard Limits): Physische Obergrenzen (Bytes/Alter) für Spool/Logs, unabhängig von SQL-Settings (Physik > Policy). Verhindert Disk-Full.
@@ -110,13 +206,28 @@ Walled Garden: Für gesperrte User nur Portal/DNS/NTP erlauben, alles andere blo
 Nur Panel-Zugriff (Panel-UI): User-facing Begriff für Walled Garden / Restricted Mode (kein Internet, aber Panel/DNS/NTP erreichbar).
 Internet gesperrt (Panel-UI): User-facing Statusmeldung für restricted_effective=true (Grund wird aus restricted_reason gemappt).
 XFRM: Linux IPsec Transform Layer (IPsec Kontext im Kernel); Basis für “L2TP nur via IPsec”.
-DNAT53: DNS-Zwang via nft nat prerouting; TCP+UDP 53 wird auf 10.77.0.1:53 umgeleitet.
+DNAT53: DNS-Zwang via nft nat prerouting; TCP+UDP 53 wird für IPv4 *und* IPv6 auf SERVICE_DNS (10.77.0.1 / fd77:0:0:0::1):53 umgeleitet.
+NAT66/MASQUERADE: IPv6-Egress-Mechanik (SoT): VPN-v6-Netze werden im nft nat postrouting auf WAN masqued (analog zu IPv4 MASQUERADE).
 DNS Counters (Counters-only): Optionales Nice-to-have: nftables Counters für DNAT53/Policy-Pfade (Pakete/Bytes), ohne Logging/Forensik (keine Ziel-IPs/Domains).
 run-state (/run/vpn-sessions): Temporärer Runtime-State (tmpfs), enthält pppX.env Mapping; nach reboot leer.
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.21 (2026-01-23): Terminologie-SoT ergänzt: Exposure-by-Binding/Binding-first/WAN-Stealth sowie Server-Sphäre/Client-Bubble und „Nicht OPEN (WAN-DoD)“ als Glossar-Definitionen (Konsistenz-Guard; keine Semantikänderung an Flows).
+- v1.20 (2026-01-23): Gate-0 Definition hybridisiert (Legacy PSK + IKEv2 Server-Zertifikat/Trust); neuer Glossar-Eintrag „Server-Zertifikat (IKEv2 Gate-0)“ ergänzt.
+- v1.19 (2026-01-21): Glossar-Normsatz ergänzt: fixed_ip ist Pflicht und nicht editierbar (1:1 Subaccount-Bindung); Definition neben fixed_ipv6 platziert.
+- v1.18 (2026-01-21): Drift-Guard ergänzt: fixed_ip/fixed_ipv6 sind Pflicht pro Subaccount (nicht optional, nicht frei editierbar; deterministisch aus ip_slot + Pool/conn_group abgeleitet).
+- v1.17 (2026-01-21): Dualstack (v6) in Glossar nachgezogen: DNAT53 v4+v6, NAT66/MASQUERADE, SERVICE_SSH (Zone0), Restricted-ADMIN-Exemption präzisiert.
+- v1.11 (2026-01-21): Thema C Begriffe ergänzt (quarantined, QUARANTINE_DAYS, ip_slot random allocation; Bezug: B064/B057) + B061 Allocator-Policy konsistent gemacht.
+- v1.10 (2026-01-21): Thema F Begriffe ergänzt (Anti-Scan, conntrack NEW Flood, CONN_NEW_* Settings Keys; Bezug: B063/B057).
+- v1.9 (2026-01-21): Thema D Begriffe ergänzt (Promotion/Demotion, effective_state Mapping, disabled_at, revoked_at) (Bezug: B062/B055).
+- v1.8 (2026-01-21): Thema I Begriffe ergänzt (ip_slot, v6_addr_policy, fixed_ipv6, Tail-Reserve, IP Ampel, ONLINE SoT) (Bezug: B061).
+- v1.7 (2026-01-21): Gate-0/Gate-1 + EAP-MSCHAPv2 + ipsec.secrets ergänzt (Bezug: B059).
+- v1.6 (2026-01-21): Pool-Key Terminologie ergänzt (POOL_V4_* / POOL_V6_* als symbolische SQL-first Keys; Bezug: B058).
+- v1.5 (2026-01-21): Settings/Parameter Terminologie ergänzt (settings_catalog/settings_* + effective_value/source + fail_class/override_scope/policy_direction) — SoT-Verweise: B057/B055.
+- 2026-01-20 v1.4: Ref-only-Hygiene ergänzt (Hinweisblock) + Schema/AAA-Referenzen bei claim_deadline und connection_login ergänzt (keine Semantikänderung).
+- 2026-01-20 v1.3: K2-Kanon ergänzt: connection_login als kanonischer Begriff (== subaccount_login == PPP Username) + conn_group (LEGACY/MODERN/ADMIN) als SQL-first Definition.
 - 2026-01-14 v1.2: Verify-Code (email_verify_code) ergänzt + Terminologie-Regel präzisiert (Verify-Code ist Code, kein Token).
 - 2026-01-14 v1.1: Terminologie-Fix: vpn_connection_id vs connection_id sauber gezogen; Decision-Range aktualisiert; IP-bound Login definiert; UNCLAIMED<->PREPROVISIONED Klarstellung.
 - 2026-01-13 v1.0: Added VERSION/CHANGELOG sections (protocol compliance).

@@ -2,11 +2,11 @@ xp-vpn-stack/blocks/B340_FAIL2BAN_RADIUS_EVENT_CLASSIFICATION.txt
 ================================================================================
 BLOCK-ID: B340
 TITLE: Fail2ban (RADIUS) – Kanonische Event-Klassifikation (F2B_EVENT) + NAT-Safety
-VERSION: v2.9
-DATUM: 2026-01-15
+VERSION: v2.10
+DATUM: 2026-01-20
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B050, B150, B155
+REQUIRES: B050, B150, B155, B341, B342
 INFLUENCES: B310
 OWNER-INTENT: Deterministische, NAT-sichere Fail2ban-Auswertung auf RADIUS-Ebene ohne Self-DoS.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
@@ -258,6 +258,7 @@ T8 Tooling-Nachweis (empfohlen, Support/Validierung):
 ================================================================================
 CHANGELOG
 ================================================================================
+- v2.10 (2026-01-20): Abhängigkeiten im Header korrigiert: B341 (logpath) und B342 (kanonische Reason-Codes) als REQUIRES ergänzt. Keine Semantik-/Policy-Änderung.
 - v2.9 (2026-01-15): Contract-Härtung/Zeilenfest: REJECT-Emission im Hook-Abschnitt von SOLL→MUSS; einzige verbliebene Ellipse im T8-Tooling-Teil entfernt (kein Format-/Logikwechsel).
 - v2.8 (2026-01-14): Redaktions-Fix im Abschnitt „Post-Auth-Type / Hook-Mechanik“: ACCEPT-Pfad Formulierung auf MUST konsolidiert (kein „optional/SOLL/wenn“), ohne Ellipsen/Platzhalter.
 - v2.7 (2026-01-14): Drittprüfung L-1..L-5 umgesetzt: ACCEPT-Emission ist MUST (Class=OK), deterministischer Flag-Guard `control:F2B_EMITTED`, SrcIP hardening (Calling-Station-Id only; verbotene Quellen explizit), Sanitizing-Contract via RFC3986 Percent-Encoding inkl. NA-Marker + Caps (User=64, Detail=256), T0 OK-Test ergänzt. Keine Änderung an B341 erforderlich.

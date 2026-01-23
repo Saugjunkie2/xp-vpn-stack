@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B171_SESSION_CONTROL_KNOTENPUNKT.txt
 ================================================================================
 BLOCK-ID: B171
 TITLE: Session Control (SimUse=1) — Knotenpunkt / Quick Map (Truth, Guard, Repair, Hardcut)
-VERSION: v1.0
-DATUM: 2026-01-14
+VERSION: v1.2
+DATUM: 2026-01-23
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: D012, B056, B168, B169
@@ -35,9 +35,9 @@ A) TRUTH (Model A):
 
 B) GUARD (Model B):
 - active_session_locks ist nur Mutex/Guard (kurzlebig).
-- TTL: 20s.
-- Release: Acct-Start -> DELETE lock row.
-- Keine PENDING/ACTIVE State-Machine.
+- TTL: active_session_lock_ttl_seconds (SQL-first Setting; failsafe/validierung gemäß B057; allowed_override_scope=NONE) — gemäß B057.
+- Ownership: server-only; never customer-controlled.
+- Fail-class: FAIL_SAFE_HARDCAP (no unbounded locks)
 
 C) REPAIR:
 - On-Demand Janitor (B169) + Periodic Janitor (B168) schließen nur echte Ghosts:
@@ -54,7 +54,7 @@ D) OVERRIDE:
 3.1 RADIUS Login Flow (authorize) – B169
 - normalize username (trim-only)
 - map subaccount_login -> vpn_connection_id (SQL-first)
-- acquire mutex lock (active_session_locks, expires_at=NOW()+20s)
+- acquire mutex lock (active_session_locks, expires_at=NOW()+active_session_lock_ttl_seconds)
 - check radacct: stop_time IS NULL?
   - nein: ACCEPT
   - ja: on-demand janitor attempt (bounded, rate-limited, cache)
@@ -81,14 +81,14 @@ D) OVERRIDE:
 ================================================================================
 - “Session aktiv” wird niemals aus /run abgeleitet, nur radacct.
 - Kein Takeover im authorize-flow.
-- Lock ist nie Langzeit-State. TTL <= 20s, Release auf Acct-Start.
+- Lock ist nie Langzeit-State. TTL ist active_session_lock_ttl_seconds (Setting; failsafe/validierung gemäß B057), Release auf Acct-Start.
 - Admin Hardcut: Kill -> Reconcile (niemals nur DB-Änderung).
 
 ================================================================================
 5) FAILURE MODES (WAS PASSIERT DANN)
 ================================================================================
 - Access-Accept ohne Acct-Start:
-  - Lock läuft nach 20s ab (kein Dauerlockout).
+  - Lock läuft automatisch ab nach TTL (active_session_lock_ttl_seconds gemäß B057), damit kein dauerhafter Deadlock entsteht.
   - radacct bleibt ggf. leer (oder offen ohne stop) -> janitor regelt, je nach Fall.
 - DB down:
   - Auth fail-closed; janitor best-effort, keine Endlos-Loops (siehe B167/B169).
@@ -107,6 +107,8 @@ D) OVERRIDE:
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.2 (2026-01-23): Entfernt verbleibende lokale 20s-Literale; Lock-Expiry/TLL referenziert jetzt ausschließlich active_session_lock_ttl_seconds gemäß B057.
+- v1.1 (2026-01-23): SQL-first Closure: Lock-TTL (20s) aus lokalem Text entfernt; Referenz auf active_session_lock_ttl_seconds gemäß B057 ergänzt.
 - v1.0 (2026-01-14): Neu. Session-Control-Knotenpunkt gemäß D012 (Truth/Guard/Repair/Override) + Invarianten + Failure Modes.
 ================================================================================
 END BLOCK B171

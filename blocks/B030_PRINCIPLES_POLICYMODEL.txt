@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B030_PRINCIPLES_POLICYMODEL.txt
 ================================================================================
 BLOCK-ID: B030
 TITLE: Principles / Policy Model
-VERSION: v1.1
-DATUM: 2026-01-14
+VERSION: v1.7
+DATUM: 2026-01-22
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B010, B020
@@ -12,9 +12,19 @@ OWNER-INTENT: Policy im OS, nicht in "VPN-Software" verankern.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
 NOTES:
-- Default-Deny als Grundprinzip: alles ist verboten, bis es pro Segment/Use-Case explizit erlaubt wird.
+- Policy-Domänen sind getrennt: Server-Sphäre = Host (INPUT/OUTPUT), Client-Bubble = VPN-Clients (FORWARD + NAT PREROUTING/POSTROUTING; bei IPsec zusätzlich XFRM-Pfad für Client-Traffic).
+- Default-Deny als Grundprinzip gilt primär für die Client-Bubble. WAN-Stealth per DROP/FILTERED ist optionaler Zusatzschutz (B100), nicht Voraussetzung für Exposure-by-Binding.
 - Segment-Trennung (User/Admin + Service-IP) ist bindend; Ausnahmen müssen als eigener Block/Decision festgehalten werden.
 - Outcome/Reason-Codes sind kanonisch: gleiche Codes in DB, Logs, Panel und Fail2ban.
+REF-ONLY HYGIENE (K2):
+- B030 ist Prinzipien-/Policy-Model. Es enthält NUR:
+  • Prinzipien (P1..P7) und explizit markierte MUST-Regeln.
+- Feldnamen/Constraints/Defaults (SQL-first) sind NICHT hier SoT:
+  • Schema/Constraints: B055
+  • Terminologie-SoT: 02_GLOSSAR.txt
+  • AAA/Enforcement-Kontext: B050
+  • Settings/Parameter Contract (Magic-Guard, Missing/Invalid/Trace): B057
+- Wenn andere Blöcke diese Begriffe verwenden, sollen sie auf die SoT-Dateien verweisen statt sie neu zu definieren.
 ================================================================================
 
 1) ZWECK
@@ -33,11 +43,14 @@ NOTES:
 - Need: deterministisches Verhalten, auditierbar.
 
 5) OUTPUTS (Prinzipien)
-- P1: WAN Exposure minimal (nur nötig)
-- P2: Services bind nur an 10.77.0.1, nie an WAN
+- P1: WAN Exposure minimal durch Binding (Exposure-by-Binding); WAN-Stealth (DROP/Filter) ist optionaler Zusatz (B100), nicht Voraussetzung
+- P2: Services binden nur an SERVICE_* (10.77.0.1/.2/.3/.4), nie an WAN und nie an 0.0.0.0
 - P3: Access-Control: nftables (Netz/Ports) + App-Layer (Panel IP Check)
 - P4: Traffic-Shaping: tc pro pppX
-- P5: Identity: SQL/RADIUS, Sub-Accounts pro Gerät
+- P5: Identity: SQL/RADIUS, Sub-Accounts pro Gerät (AAA) + Connection-Klassifikation (conn_group, SQL-first)
+  - connection_login (KANON) == PPP Username == subaccount_login (DB-Feldname, bleibt so) (SoT: 02_GLOSSAR.txt; AAA-Drift-Guard: B050; Schema: B055)
+  - conn_group ist SQL-first pro Connection (B055) und treibt Scope/Policy/Diag-Konsistenz (LEGACY/MODERN/ADMIN) (Begriff-SoT: 02_GLOSSAR.txt)
+  - Kanon der deterministischen Ableitungen + SoT/Gates (inkl. Verify-vs-AAA Trennung): B058
 - P6: Feature-Gates: Walled-Garden schaltet Policies pro User um
 - P7: Observability: Accounting + /diag Endpoint
 
@@ -46,19 +59,25 @@ NOTES:
 - Peer Isolation ist Kernel-Policy, nicht "Best effort".
 
 7) OPTIONEN
-- Additional service endpoints nur, wenn sie an 10.77.0.1 gebunden + firewall gated sind.
+- Additional service endpoints nur, wenn sie als eigener SERVICE_* Slot im SERVICE_NET definiert, gebunden und per Scope-Matrix hart freigeschaltet sind.
 
 8) FEHLERBILDER & DIAGNOSE
 - Wenn ein Service auf 0.0.0.0 bindet -> Regelbruch, sofort fixen.
 
 9) TESTS
-- Portscan WAN zeigt nur 500/4500, ESP.
+- Portscan WAN zeigt nur VPN-Endpunkte (UDP 500/4500 + ESP). Alle anderen Ports sind CLOSED oder FILTERED (beides ok), aber nicht OPEN.
 - Portscan User-Netz sieht nur 10.77.0.1:80/443/53 (wenn aktiv).
-+ optional 10.77.0.1:123/UDP (wenn NTP aktiv).
+- User/Clients sehen nur die freigeschalteten SERVICE_* Ports (DNS auf .1:53, Web/Portal auf .3:80/443, NTP auf .4:123), und niemals Admin-Tools.
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.7 (2026-01-23): Prinzip klargestellt: Default-Deny gilt für Client-Bubble; WAN-Minimal-Exposure wird primär via Binding erreicht; WAN-Scan-Test präzisiert (CLOSED/FILTERED ok, aber nicht OPEN).
+- v1.6 (2026-01-21): Referenz auf B058 ergänzt (conn_group deterministische Ableitungen/SoT/Gates).
+- v1.5 (2026-01-21): Ref-only-Hygiene erweitert: Settings/Parameter Contract als SoT-Referenz auf B057 ergänzt (keine Semantikänderung).
+- v1.4 (2026-01-20): Ref-only-Hygiene ergänzt (SoT-Mapping: Glossar/B050/B055) + P5 Terminologiezeilen mit SoT-Referenzen versehen (keine Semantikänderung).
+- v1.3 (2026-01-20): K2-Kanon ergänzt: conn_group als SQL-first Connection-Klassifikation; Terminologie-Kanon connection_login==PPP Username==subaccount_login dokumentiert.
+- v1.2 (2026-01-20): Policy-Model auf SERVICE_NET/SERVICE_* umgestellt (statt „alles auf 10.77.0.1“); Prinzipien/Tests entsprechend präzisiert.
 - v1.1 (2026-01-14): Terminologie-Fix: Outcome/Reason-Codes sind „Codes“, nicht „Tokens“.
 - v1.0: Initial
 ================================================================================

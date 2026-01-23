@@ -2,12 +2,12 @@ xp-vpn-stack/blocks/B260_TIME_NTP_STRATEGY.txt
 ================================================================================
 BLOCK-ID: B260
 TITLE: Time / NTP Strategy (XP Uhr-Probleme)
-VERSION: v1.0
-DATUM: 2026-01-06
+VERSION: v1.1
+DATUM: 2026-01-20
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B150, B210
-INFLUENCES: alle
+REQUIRES: B060, B150, B210, docs/nft_service_ip_scopes.txt
+INFLUENCES: B220, B230, B240
 OWNER-INTENT: TLS/Panel/Blockpage zuverlässig trotz kaputter XP-Uhr.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
@@ -21,17 +21,17 @@ NOTES:
 - XP Uhr kann falsch sein -> TLS cert "not yet valid".
 - Strategy:
   - Pre-connect time fix over normal internet (best effort)
-  - Post-connect NTP forced to 10.77.0.1
+  - Post-connect NTP forced to SERVICE_NTP 10.77.0.4
 
 2) GRENZEN
 - Zeitfix vor connect kann scheitern (no internet dns), dann fallback to manual.
 
 3) ABHÄNGIGKEITEN
-- Requires: B220
-- Influences: B230, B240
+- Requires: B060, B150, B210, docs/nft_service_ip_scopes.txt
+- Influences: B220, B230, B240
 
 4) INPUTS
-- chrony (server) on 10.77.0.1:123
+- chrony (server) on SERVICE_NTP 10.77.0.4:123
 - Setup tool logic
 
 5) OUTPUTS
@@ -41,7 +41,7 @@ NOTES:
 6) MUST
 - Server provides NTP internally
 - Setup tool configures w32time peers post-connect
-- Optional firewall redirect NTP requests (ppp* udp 123) to 10.77.0.1
+- Optional firewall redirect NTP requests (ppp* udp 123) to SERVICE_NTP 10.77.0.4
 
 7) OPTIONAL
 - Pre-connect check using public NTP or HTTP Date header.
@@ -50,10 +50,11 @@ NOTES:
 - Panel cert invalid -> time wrong -> run time fix again.
 
 9) TESTS
-- Set XP time to 2005 -> run setup -> panel works.
+- Set XP time to 2005 -> connect VPN -> run time fix/w32time resync against SERVICE_NTP 10.77.0.4 -> panel/portal on SERVICE_WEB 10.77.0.3 works (TLS not-yet-valid resolved).
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.1 (2026-01-20): NTP auf SERVICE_* SoT umgestellt: chrony/NTP-Endpoint = SERVICE_NTP 10.77.0.4 (statt 10.77.0.1); ZWECK/MUST/TESTS entsprechend angepasst; Header REQUIRES/INFLUENCES auf B060 + Scope-Matrix konsolidiert.
 - v1.0: Initial
 ================================================================================

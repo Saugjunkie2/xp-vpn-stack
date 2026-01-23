@@ -1,0 +1,75 @@
+xp-vpn-stack/blocks/B344_DOD_OPEN_DECISIONS_OPEN_QUESTIONS.txt
+================================================================================
+BLOCK-ID: B344
+TITLE: DoD + offene Festzurrungen + Entscheidungen + offene Fragen (Thema J)
+VERSION: v1.0
+DATUM: 2026-01-21
+STATUS: ACTIVE
+PRIORITY: MUST
+REQUIRES: B050, B055, B060, B100, B166
+INFLUENCES: 01_CHANGELOG.txt, 04_BLOCK_INDEX.txt, 00_MASTER_v2.6.txt
+OWNER: Marco (Owner) + ChatGPT (Co-Architect)
+================================================================================
+
+NOTES:
+- Inhalt unterhalb ist 1:1 aus ENTWURF übernommen: "=== J) DoD + offene Festzurrungen + Entscheidungen + offene Fragen ==="
+- Dieser Block ist ein DoD-/Entscheidungs-/Offene-Fragen-Knotenpunkt (kanonisch), keine Implementation.
+
+================================================================================
+1) INHALT (1:1 ENTWURF)
+================================================================================
+
+=== J) DoD + offene Festzurrungen + Entscheidungen + offene Fragen ===
+
+11) Definition of Done (DoD) – Nachweise für Patch-Reife
+  11.1 IP-Allocator / Quarantäne (MUST)
+    - revoked_at → IP bleibt QUARANTINE_DAYS unvergebbar.
+    - Slot-Allocator ist auditierbar: Vergabe über Random-Start + bounded Probing; Ergebnis ist über ip_slot + Reason nachvollziehbar.
+    - Parallelität: keine Doppelvergabe (Unique+TX).
+    - Exhaustion: Hard-Fail + eindeutiger Reason, kein Pool-Fallback.
+    - fixed_ip immutable (kein Write-Path).
+
+  11.2 Gruppen/Pools/Hard-Fails (MUST)
+    - Pool-Mismatch → DENY + DISABLED + Audit.
+    - Admin ist garantiert restricted-immune durch conn_group+Pool.
+    - Promotion/Demotion: neuer Client nötig; Admin-Connections werden sicher beendet/deaktiviert.
+
+  11.3 Connection Rate Limit (MUST)
+    - Per-User/per-IP/per-token Rate Limit greift in Panel-API und RADIUS.
+    - Brute-force/Enumeration führt zu klaren Blocks (429/ban), ohne PII-Leaks.
+
+  11.4 Verify/Claim Gates (MUST)
+    - Verify beeinflusst exakt definierte Gates (welche Panel-Features, welche Provisioning-States).
+    - Claim-Token: single-use, TTL, hashed storage, keine Enumeration.
+    - „Unclaimed“ ist ein harter Zustand, nicht nur UI-Flag.
+
+  11.5 Logging/Retention (MUST)
+    - Logs rotieren: kein Disk-Full.
+    - Keine Secrets in Logs.
+    - Reason-Codes überall: DENY/RESTRICT/OK sind Codes, nicht „Tokens“.
+
+  11.6 Policy Apply/Reconcile (MUST)
+    - apply ist idempotent.
+    - reconcile repariert drift (facts vs derived) ohne neue Ressourcen zu verbrauchen.
+    - harte Notbremse vorhanden (Kill + Disable).
+
+ENTWURF-FESTE ENTSCHEIDUNGEN
+
+
+OFFENE FRAGEN
+
+OFFENE FRAGENLISTE (entscheidungsreif), mit Anker + warum + Validierung
+
+(aktuell keine offenen Fragen in diesem Abschnitt)
+=== APPENDIX: Originale NX-Listen-Überschrift (Historie) ===
+
+LUECKENLISTE (nur innerhalb ENTWURF) – NX-Items
+Scope: Diese Items sind KEINE neuen Architekturentscheidungen, sondern fehlende Kanon-Bausteine,
+die sonst später Lücken/Dead-Ends/Policy-Loch verursachen. Bezug: ENTWURF
+
+
+================================================================================
+CHANGELOG
+================================================================================
+- v1.0 (2026-01-21): Neu: Thema J (DoD + offene Festzurrungen + Entscheidungen + offene Fragen) 1:1 aus ENTWURF übernommen.
+================================================================================

@@ -2,8 +2,8 @@ xp-vpn-stack/decisions/D006_NTP_MANDATORY_XP.txt
 ================================================================================
 DECISION-ID: D006
 TITLE: NTP/Zeitstrategie ist Pflicht (XP Zertifikats- und Panel-Stabilität)
-VERSION: v1.1
-DATUM: 2026-01-13
+VERSION: v1.2
+DATUM: 2026-01-20
 STATUS: ACCEPTED
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 ================================================================================
@@ -19,7 +19,7 @@ CONTEXT
 DECISION
 - Wir entscheiden uns für:
   - Pre-Connect best-effort Zeitfix über normales Internet.
-  - Post-Connect NTP auf 10.77.0.1 als dauerhaftes Time-Source.
+  - Post-Connect NTP auf SERVICE_NTP 10.77.0.4 als dauerhaftes Time-Source.
   - Optional NTP Redirect (udp/123) intern.
 
 ALTERNATIVES
@@ -48,6 +48,7 @@ LINKED BLOCKS
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.2 (2026-01-20): Post-Connect NTP Target auf SERVICE_NTP 10.77.0.4 (B060-SoT) korrigiert.
 - v1.1 (2026-01-13): Added VERSION header field (protocol compliance).
 - v1.0: initial
 ================================================================================

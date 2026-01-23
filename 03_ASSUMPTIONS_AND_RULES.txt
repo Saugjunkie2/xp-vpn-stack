@@ -1,8 +1,8 @@
 xp-vpn-stack/03_ASSUMPTIONS_AND_RULES.txt
 ================================================================================
 TITLE: ASSUMPTIONS & RULES (bindend)
-VERSION: v2.5
-DATUM: 2026-01-15
+VERSION: v2.7
+DATUM: 2026-01-20
 STATUS: ACCEPTED
 OWNER-INTENT: Bindende Annahmen/Regeln (Scope, Security, Defaults), die alle Blocks konsistent machen.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
@@ -11,21 +11,38 @@ OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 A) Systemannahmen
 - Debian 13 minimal.
 - WAN Interface: ens13 (bei Abweichung: in B060 + B100 + nftables/ethtool Defaults anpassen).
-- IPv6 deaktiviert (Provider + OS), um Leaks/Überraschungen zu vermeiden.
-- Alles läuft auf EINER Box (VPN-Exit, DB, Panel, DNS, NTP). Wenn später getrennt:
-  neue Version + neue Latenz/Failure-Analyse + neue Security-Exposure-Analyse.
-- Service-IP ist fix: 10.77.0.1/32 auf lo ist der Bind-Anker für interne Dienste (DNS/Panel/Portal/NTP).
-- Zwei VPN-Netze sind fix:
-  - User-Netz:  10.77.10.0/24
-  - Admin-Netz: 10.77.20.0/24
+- IPv6 ist NICHT global deaktiviert:
+  - ADMIN/MODERN sind Dualstack (IPv4+IPv6 ULA) gemäß B060 (fd77:0:0:2::/64, fd77:0:0:32::/64).
+  - LEGACY bleibt IPv4-only (XP/Vista PPP).
+  - Leak-Control ist Pflicht: WAN-IPv6 ist aktiv und muss egress/forward Policies so gesetzt, dass keine unbeabsichtigten IPv6-Leaks möglich sind (kein „stiller Split“).
+  - VPN-Inbound ist dualstack für MODERN/ADMIN:
+    - IKEv2 (UDP 500/4500 + ESP) ist inbound auf WAN über IPv4 UND IPv6 erlaubt (AAAA ist First-Class).
+    - LEGACY bleibt IPv4-only (L2TP/IPsec XP/Vista).
+  - IPv6 Egress (ADMIN/MODERN) ist bindend: v6 läuft via NAT66/MASQUERADE auf WAN (analog IPv4 MASQUERADE); keine „IPv6-Sonderbehandlung“ auf Policy-Ebene (B120).
+  - fixed_ip ist NICHT optional: jede vpn_connection/Subaccount hat ip_slot als SoT; daraus werden fixed_ip (IPv4, immer) und fixed_ipv6 (für Dualstack) materialisiert; Änderung nur via Admin Re-Provision/Slot-Reassignment (B055/B061).
+
+- SERVICE ist kein /32-Anker mehr, sondern SERVICE_NET:
+  - SERVICE_NET_v4: 10.77.0.0/28 (Service-IPs .1 DNS, .2 Resolver/Unbound, .3 Web, .4 NTP, .5 SSH (admin-only), .10 PPP-GW-Anchor)
+  - SERVICE_NET_v6: fd77:0:0:0::/64 (Service-IPs ::1 DNS, ::2 Unbound, ::3 Web, ::4 NTP, ::5 SSH (admin-only))
+  - Bind-Regel: Services binden ausschließlich an SERVICE_* (nicht an WAN/0.0.0.0).
+
+- VPN Pools (SoT, ersetzt „2 Netze fix“):
+  - LEGACY_VPN_NET_v4: 10.77.16.0/20 (XP/Vista, L2TP/IPsec, IPv4-only)
+  - ADMIN_VPN_NET_v4/v6: 10.77.2.0/24 + fd77:0:0:2::/64
+  - MODERN_VPN_NET_v4/v6: 10.77.32.0/20 + fd77:0:0:32::/64
 - Pro Gerät = eigener Subaccount (1 Kunde -> n Verbindungen). Pro Subaccount feste IP (Policy/Stats/QoS/Quota).
 
 B) Sicherheitsannahmen
 - XP ist potenziell kompromittiert -> Outbound Abuse Blocks sind Pflicht (min. SMTP + SMB/NetBIOS).
 - User sollen sich nicht gegenseitig sehen -> Peer-Isolation Pflicht (User↔User DROP).
-- Server darf von außen nicht wie "Admin-Server" wirken -> WAN minimal offen:
-  UDP 500/4500 + ESP; keine Web/SSH/DB/AdGuard UI auf WAN.
-- L2TP darf nicht "blank" im Internet stehen -> UDP 1701 nur via IPsec/XFRM.
+- ADMIN ist nicht “gleichwertig” zu MODERN/USER bzgl. QUOTA/EXPIRY/UNCLAIMED_OVERDUE:
+  - conn_group=ADMIN wird beim Erstellen neuer vpn_connection automatisch gebunden/claimed (kein UNCLAIMED Flow für ADMIN).
+  - QUOTA/EXPIRY/UNCLAIMED_OVERDUE sind USER-Trigger (conn_group != ADMIN); ADMIN bleibt davon ausgenommen.
+  - Manual Restrict / Not-Aus gilt für ALLE conn_groups (inkl. ADMIN).
+  - Baseline-Security (DNS-Zwang, Peer-Isolation, Outbound-Abuse-Blocks, Rate-Limits) bleibt auch für ADMIN aktiv.
+- Server darf von außen nicht wie "Admin-Server" wirken -> WAN minimal offen (v4+v6):
+  - Nur VPN-Inbound sichtbar: UDP 500/4500 + ESP (IKEv2 dualstack für ADMIN/MODERN; LEGACY v4-only).
+  - Keine Web/SSH/DB/AdGuard UI auf WAN (weder IPv4 noch IPv6).
 - Fail-Closed ist Pflicht:
   Wenn AAA/SQL/Policy nicht sauber evaluierbar ist, wird kein Zugriff gewährt (kein Break-Glass via VPN).
 - DNS ist Sicherheits- und Support-Kern:
@@ -84,7 +101,8 @@ D) Qualitätsregeln / Abnahme
 ================================================================================
 CHANGELOG
 ================================================================================
-
+- v2.7 (2026-01-20): SoT=002/003: MODERN ULA Prefix auf fd77:0:0:32::/64 angehoben (statt ::3); Service-Text an Resolver/Unbound-Terminologie angepasst.
+- v2.6 (2026-01-20): K1-Konsistenz: Systemannahmen von „Service-IP /32 + zwei Netze + IPv6 aus“ auf B060-SoT gehoben (SERVICE_NET /28 + SERVICE_* IPs; LEGACY/ADMIN/MODERN Pools; Dualstack nur ADMIN/MODERN; Leak-Control für WAN-IPv6 als Pflicht-Constraint).
 ================================================================================
 ================================================================================
 ENDE 03_ASSUMPTIONS_AND_RULES.txt

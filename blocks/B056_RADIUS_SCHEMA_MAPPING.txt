@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B056_RADIUS_SCHEMA_MAPPING.txt
 ================================================================================
 BLOCK-ID: B056
 TITLE: RADIUS SQL Schema + Mapping + SimUse-Atomic Lock (Guard/Mutex)
-VERSION: v1.8
-DATUM: 2026-01-14
+VERSION: v1.9
+DATUM: 2026-01-23
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B050
@@ -47,7 +47,7 @@ Claim-Tokens (claim_token/claim_token_hash) are App-Layer only and MUST NOT be u
 - active_session_locks ist KEIN Session-State und NICHT „Truth“.
 
 Acquire (authorize, ganz am Ende, kurz vor OK/ACCEPT):
-- INSERT active_session_locks (vpn_connection_id, session_key, acquired_at=NOW(), expires_at=NOW()+20s)
+- INSERT active_session_locks (vpn_connection_id, session_key, acquired_at=NOW(), expires_at=NOW()+active_session_lock_ttl_seconds)
 - Wenn UNIQUE(vpn_connection_id) verletzt / Lock existiert und nicht expired:
     -> deterministischer Abbruch (REJECT oder definierter deny/restrict Pfad gemäß B050/B342).
 
@@ -57,7 +57,7 @@ Release (accounting, Acct-Start):
 - Safety: Wenn Acct-Start nie kommt (Crash/Drop), greift TTL (expires_at) + Janitor-Cleanup (B168).
 
 TTL:
-- expires_at ist kanonisch: NOW()+20s (siehe D012 O1).
+- expires_at ist kanonisch: NOW()+active_session_lock_ttl_seconds (siehe D012 O1; Setting/SQL-first).
 - Expired Locks dürfen im Auth-Pfad ignoriert/gelöscht werden (idempotent).
 
 ## 5) Notes (Truth-Hierarchie, D012)
@@ -68,12 +68,14 @@ TTL:
 ================================================================================
 CHANGELOG
 ================================================================================
-- v1.8 (2026-01-14): Konsistenz/Redaktion: NOTES „unlang“ Schreibweise korrigiert; Acquire-INSERT an Core-Schema angepasst (acquired_at=NOW(), kein „meta“); Deny/Restrict-Referenz auf kanonische Policy-Quelle B050/B342 harmonisiert.
+- v1.9 (2026-01-23): SQL-first SoT-Schärfung: Lock-TTL nicht mehr als lose Zahl, sondern als Settings-Key active_session_lock_ttl_seconds referenziert.
+- v1.8 (2026-01-14): Konsistenz/Redaktion: NOTES „unlang“ S...ct-Referenz auf kanonische Policy-Quelle B050/B342 harmonisiert.
+Referenz auf kanonische Policy-Quelle B050/B342 harmonisiert.
 - v1.7 (2026-01-14): Terminologie-Präzisierung: „claim_token=Claim-only“ statt unqualifiziertem „Token=Claim-only“ im INHALT-Header.
 - v1.6 (2026-01-14): Identity Model präzisiert: subaccount_login ist server-generated, nicht-enumerierbar; Format vpn_+16 Base32 (a-z2-7) kanonisiert.
-- v1.5 (2026-01-14): Redaktion: Terminologie bereinigt – “Lifecycle” in TITLE/NOTES ersetzt durch “Guard/Mutex” (inhaltlich unverändert, bleibt Modell A+B).
-- v1.4 (2026-01-14): Guard-Semantik finalisiert: active_session_locks = Mutex (kein Lifecycle), Release auf Acct-Start (nicht Stop), TTL=20s (D012) und Text entsprechend harmonisiert.
-- v1.3 (2026-01-14): Session-Control kanonisiert gemäß D012: radacct als Truth (stop_time IS NULL), active_session_locks nur als kurzlebiger Mutex (TTL 20s), Release auf Accounting-Start (DELETE), kein PENDING/ACTIVE Lifecycle.
+- v1.5 (2026-01-14): Redaktion: Terminologie bereinigt – “L...durch “Guard/Mutex” (inhaltlich unverändert, bleibt Modell A+B).
+- v1.4 (2026-01-14): Guard-Semantik finalisiert: active_ses...(nicht Stop), TTL via active_session_lock_ttl_seconds (B057/D012) und Text entsprechend harmonisiert.
+- v1.3 (2026-01-14): Session-Control kanonisiert gemäß D012...se auf Accounting-Start (DELETE), kein PENDING/ACTIVE Lifecycle.
 - v1.2 (2026-01-09): Terminologie-Fix: subaccount_secret entfernt, kanonisch subaccount_nt_hash/NT-Password (MSCHAPv2). Redaktion: doppelte Überschrift „2) 2)“ korrigiert.
 - v1.1 (2026-01-09): Semantik-Fix: Token=Claim-only. RADIUS/PPP Auth via subaccount_login + MSCHAPv2 (NT-Password/NT-Hash). Hinweis auf IPsec-PSK als separater Layer. Abschnitts-Header „unverändert“ korrigiert.
 - v1.0 (2026-01-07): Neu angelegt. Inhalt aus T02_RADIUS_SCHEMA_MAPPING in Block-Form übernommen (ohne inhaltliche Änderung).

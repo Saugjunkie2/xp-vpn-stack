@@ -1,0 +1,115 @@
+====================================================================
+ENTWURF WORKCOPY — 1:1 COPY-PASTE (ENTWURF_SORTIERT -> K0–K10)
+====================================================================
+
+DATEI: ENTWURF_WORKCOPY_REORDER_K0-K10_v1.0.txt
+VERSION: v1.0.0
+Stand: 2026-01-19
+Status: WORKCOPY (enthält 1:1 kopierte Originalzeilen aus ENTWURF_SORTIERT_v1.1)
+
+QUELLE (SoT für diesen Workcopy-Schritt):
+- ENTWURF_SORTIERT_v1.1.txt (Originalzeilen 1:1, nur umsortiert)
+
+ZWECK
+- Diese Datei ist die reine Sammelstelle für 1:1 Copy-Paste aus ENTWURF_SORTIERT_v1.1.
+- Hier darf Volltext stehen.
+- Diese Datei ist NICHT der Ort für Single-Anchor/Ref-only/Delta-Stub (das bleibt in PATCH_VORBEREITUNG (K0–K10)).
+
+ARBEITSREGELN (für Workcopy)
+W1 1:1 Pflicht:
+- Einfügen ohne Umformulierung, ohne Umschreiben, ohne Kürzen.
+
+W2 Kapitel-Disziplin:
+- Inhalt aus ENTWURF_SORTIERT_v1.1 wird kapitelweise in die passende K-Sektion kopiert (COPY-PLAN unten).
+- Keine Vermischung: wenn du nicht sicher bist, lieber in „K10.3 BACKLOG (UNSORTIERT)“ ablegen mit Quelle/Pointer.
+
+W3 Source-Pointer je Block:
+- Vor JEDEM kopierten Block steht:
+  - [SRC] <Kapitel/Abschnitt aus ENTWURF_SORTIERT_v1.1>
+  - [NOTE] (optional) kurzer Hinweis “warum hier abgelegt”
+
+COPY-PLAN (ENTWURF -> K*)
+- A -> K2
+- B -> K1
+- C (+NX-02 Slot-Mapping) -> K3
+- D -> K4
+- E (+NX-06/NX-07 + Fest-Claim/Hard-Stop) -> K5
+- F (+nft materialize fest) -> K6
+- G -> K7
+- H (NX-01/PSK/IKE) -> K8
+- I (ONLINE/Janitor/Stats) -> K9
+- J -> K10 (aber: hier in Workcopy darfst du J 1:1 ablegen; später wird es in PATCH_VORBEREITUNG zu Index/Register umgebaut)
+
+====================================================================
+K0 — META / NOTIZEN / UNSORTIERTES (WORKCOPY)
+====================================================================
+[Hier nur: Meta, Copy-Notizen, Dinge die du noch nicht zuordnen kannst.]
+
+====================================================================
+K1 — SA-NET (WORKCOPY-Ablage)
+====================================================================
+[SRC] ...
+<PASTE 1:1 aus ENTWURF_SORTIERT_v1.1 Abschnitt B>
+
+====================================================================
+K2 — SA-KEY (WORKCOPY-Ablage)
+====================================================================
+[SRC] ...
+<PASTE 1:1 aus ENTWURF_SORTIERT_v1.1 Abschnitt A>
+
+====================================================================
+K3 — SA-ALLOC (WORKCOPY-Ablage)
+====================================================================
+[SRC] ...
+<PASTE 1:1 aus ENTWURF_SORTIERT_v1.1 Abschnitt C>
+
+====================================================================
+K4 — SA-PROV (WORKCOPY-Ablage)
+====================================================================
+[SRC] ...
+<PASTE 1:1 aus ENTWURF_SORTIERT_v1.1 Abschnitt D>
+
+====================================================================
+K5 — SA-STATE (WORKCOPY-Ablage)
+====================================================================
+[SRC] ...
+<PASTE 1:1 aus ENTWURF_SORTIERT_v1.1 Abschnitt E>
+
+====================================================================
+K6 — SA-ENF (WORKCOPY-Ablage)
+====================================================================
+[SRC] ...
+<PASTE 1:1 aus ENTWURF_SORTIERT_v1.1 Abschnitt F>
+
+====================================================================
+K7 — SA-SETTINGS (WORKCOPY-Ablage)
+====================================================================
+[SRC] ...
+<PASTE 1:1 aus ENTWURF_SORTIERT_v1.1 Abschnitt G>
+
+====================================================================
+K8 — SA-IKE (WORKCOPY-Ablage)
+====================================================================
+[SRC] ...
+<PASTE 1:1 aus ENTWURF_SORTIERT_v1.1 Abschnitt H>
+
+====================================================================
+K9 — SA-OPSUI (WORKCOPY-Ablage)
+====================================================================
+[SRC] ...
+<PASTE 1:1 aus ENTWURF_SORTIERT_v1.1 Abschnitt I>
+
+====================================================================
+K10 — J-INHALT (WORKCOPY-Ablage)
+====================================================================
+K10.1 DoD / Validierung / Tests (Workcopy)
+[SRC] ...
+<PASTE 1:1 aus ENTWURF_SORTIERT_v1.1 Abschnitt J>
+
+K10.2 Backlog / Offene Fragen (Workcopy)
+[SRC] ...
+<PASTE 1:1, wenn J hier Dinge enthält>
+
+K10.3 Entscheidungen / FEST-Markierungen (Workcopy)
+[SRC] ...
+<PASTE 1:1, wenn J hier Dinge enthält>

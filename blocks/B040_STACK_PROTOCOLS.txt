@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B040_STACK_PROTOCOLS.txt
 ================================================================================
 BLOCK-ID: B040
 TITLE: Stack / Protokolle / Komponenten
-VERSION: v1.0
-DATUM: 2026-01-06
+VERSION: v1.4
+DATUM: 2026-01-22
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B010, B020, B030
@@ -12,9 +12,11 @@ OWNER-INTENT: Technische Basis definieren (Pakete, Rollen, Schnittstellen).
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
 NOTES:
-- Kanonischer Stack: strongSwan (IKEv1) + xl2tpd + pppd + nftables; Erweiterungen nur, wenn ein eigener Block sie fordert.
-- Kein „GUI-Server“: Installation/Config muss headless reproduzierbar sein (systemd Units, Dateien, Hooks).
-- XP-Kompatibilität erfordert IKEv1/NAT-T/PPP-Auth-Entscheidungen; jede Änderung muss gegen B070/B080/B090 validiert werden.
+- SoT ist 001/002/003: Protokoll-Stack ist conn_group-gesteuert (Selector), nicht „nur L2TP“.
+- LEGACY (XP/Vista): L2TP/IPsec (IKEv1 via strongSwan) + xl2tpd/pppd.
+- ADMIN/MODERN: IKEv2 (strongSwan) als eigener Access-Path (Dualstack), AAA weiterhin SQL-first via FreeRADIUS.
+- IKEv2 Credential/Gate-0 Ops-Contract (Server-Zertifikat/CA-Trust als Gate-0, connection_login als Gate-1, EAP-MSCHAPv2, Renewal/Failure-Modes, fail-closed): siehe B059.
+- Ziel bleibt: deterministische Policies + minimale Angriffsfläche; Protokollvielfalt ist nur dort erlaubt, wo SoT sie fordert (ADMIN/MODERN).
 ================================================================================
 
 1) ZWECK
@@ -22,7 +24,8 @@ NOTES:
 
 2) GRENZEN
 - Kein SoftEther-Client.
-- Kein anderes VPN-Protokoll als L2TP/IPsec (IKEv1) im Kern.
+- LEGACY-Kernpfad ist L2TP/IPsec (IKEv1) + xl2tpd/pppd (XP/Vista).
+- ADMIN/MODERN dürfen einen separaten IKEv2-Access-Path haben (SoT 001/002/003), aber AAA/Policy bleibt identisch SQL-first (FreeRADIUS).
 
 3) ABHÄNGIGKEITEN
 - Requires: B020
@@ -31,13 +34,15 @@ NOTES:
 4) INPUTS
 - Debian 13 minimal
 - WAN: ens13
-- Loopback Service-IP: 10.77.0.1/32
+- SERVICE_NET + SERVICE_* (B060): SERVICE_DNS 10.77.0.1, SERVICE_RESOLVER 10.77.0.2, SERVICE_WEB 10.77.0.3, SERVICE_NTP 10.77.0.4, SERVICE_GW_PPP 10.77.0.10
+- neben pppX (Legacy) auch IKEv2-SA/Child-SA (Modern/Admin) existieren
 
 5) OUTPUTS
 - Tunneling:
   - IKEv1/PSK über UDP 500/4500 + ESP
   - L2TP über UDP 1701 (nur innerhalb IPsec)
   - PPP Sessions ppp0..pppN
+  - conn_group die Enforcement-Scopes bestimmt (nftables + AAA).
 - IP allocation:
   - PPP/IPCP, statische IPs pro Verbindung via RADIUS Reply Attribute
 
@@ -62,5 +67,8 @@ NOTES:
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.4 (2026-01-23): B059-Verweis aktualisiert: IKEv2 Gate-0 ist Server-Zertifikat/Trust (Hybrid: Legacy bleibt PSK), nicht PSK für IKEv2.
+- v1.3 (2026-01-21): Verweis auf B059 ergänzt (IKEv2 Credentials + Gate-0 PSK Ops-Contract).
+- v1.2 (2026-01-20): Stack-Definition auf 001/002/003-SoT gehoben: conn_group Selector (LEGACY=L2TP/IPsec+PPP, ADMIN/MODERN=IKEv2 Dualstack) statt „nur L2TP“.
 - v1.0: Initial
 ================================================================================

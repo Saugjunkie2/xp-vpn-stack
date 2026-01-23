@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B120_NFT_FORWARD_NAT_FULLTUNNEL.txt
 ================================================================================
 BLOCK-ID: B120
 TITLE: nftables Forward + NAT (Full-Tunnel)
-VERSION: v1.5
-DATUM: 2026-01-14
+VERSION: v2.0
+DATUM: 2026-01-21
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B060, B100, B110
@@ -23,23 +23,20 @@ NOTES:
 2) GRENZEN
 - Kein Forward zwischen User-Clients (handled in B130).
 - Restricted Mode (B150) kann Forward zusätzlich reduzieren (Portal-Only).
-- WICHTIG (Pfad-Trennung): Dieser Block beschreibt nur Restricted Enforcement im forward-Pfad (WAN/NAT).
-  - Traffic zu lokalen Services auf 10.77.0.1 läuft über filter input und MUSS dort separat durch B150 + docs/nft_service_ip_scopes.txt restricted allowlist
- enforced werden (sonst bleiben lokale Ports offen).
-- D1a Connect-Pending Gate (NO-UNPOLICED-WINDOW, SQL-FIRST):
-  - Es gibt ein separates nftables Set connect_pending_v4 (IPv4).
-  - Semantik: Wenn ip saddr ∈ connect_pending_v4 => DROP im forward path (deny-all forward).
-  - Dieses Gate ist NICHT restricted_v4 / Walled Garden und erlaubt keine Portal/DNS-Fallbacks.
-  - connect_pending_v4 wird beim Connect (ip-up) vor policy-apply gesetzt und erst nach SUCCESS entfernt;
-    bei Apply-Failure wird die PPP-Session deterministisch beendet (fail-closed).
+- WICHTIG (Pfad-Trennung): Dieser Block beschreibt nur Enforcement im forward-Pfad (WAN/NAT).
+  - Traffic zu lokalen Services im SERVICE_NET (dst ∈ 10.77.0.0/28) ist lokales Ziel => nftables filter input.
+  - Diese lokalen Service-Scopes (SERVICE_DNS/SERVICE_WEB/SERVICE_NTP) müssen im input-Pfad separat enforced werden:
+    via B150 + docs/nft_service_ip_scopes.txt (sonst bleiben lokale Ports offen).
+
 - Wichtig: Restricted Enforcement (B150) muss im forward chain vor dem allgemeinen Forward-Allow (dieser Block) evaluiert werden (sonst Umgehung möglich).
-- Konkret: Für saddr∈restricted_v4 (B150) ist im forward chain nur Verkehr zu 10.77.0.1 erlaubt:
-  - DNS: 53/udp + 53/tcp
-  - Web/Portal: 80/tcp + 443/tcp
-  - NTP: 123/udp
-  - ICMP echo zu 10.77.0.1 (Diagnose)
-  - Alles andere (insb. Forward->ens13) muss droppen.
-- DNS-Enforcement (B210): DNAT für 53/udp + 53/tcp auf 10.77.0.1 muss in nft nat prerouting auf iifname "ppp*" greifen (vor filter/forward), damit Clients keinen externen DNS nutzen können.
+
+- Konkret (Restricted im forward-Pfad):
+  - Für saddr ∈ restricted_v4 ODER saddr ∈ restricted_v6 (B150) MUSS forward ins WAN (z.B. oif ens13) deterministisch DROP sein (kein Internet).
+  - Es gibt im forward-Pfad keine „Portal/DNS/NTP-Ausnahmen“ zu SERVICE_* — denn SERVICE_* ist input, nicht forward.
+- DNS-Enforcement (B210): DNAT für 53/udp + 53/tcp auf SERVICE_DNS
+  - v4 Ziel: 10.77.0.1:53
+  - v6 Ziel: fd77:0:0:0::1:53
+  (DNAT passiert in nat prerouting; danach greifen input/filter/forward Pfade wie kanonisch beschrieben).
 
 3) ABHÄNGIGKEITEN
 - Requires: B060, B100, B110
@@ -52,15 +49,59 @@ NOTES:
 
 5) OUTPUTS
 - forward allow:
-  - 10.77.10.0/24 -> ens13
-  - 10.77.20.0/24 -> ens13
+  - LEGACY_VPN_NET_v4  10.77.16.0/20      -> ens13
+  - ADMIN_VPN_NET_v4   10.77.2.0/24       -> ens13
+  - MODERN_VPN_NET_v4  10.77.32.0/20      -> ens13
+  - ADMIN_VPN_NET_v6   fd77:0:0:2::/64    -> ens13   (Dualstack)
+  - MODERN_VPN_NET_v6  fd77:0:0:32::/64   -> ens13   (Dualstack)
 - conntrack allow for return traffic
-- NAT masquerade both nets out ens13
+- NAT:
+  - IPv4: masquerade Richtung WAN (ens13)
+  - IPv6: NAT66/masquerade Richtung WAN (ens13) für ADMIN/MODERN v6 (LEGACY ist v4-only)
+  - IPv4: NAT44/MASQUERADE für LEGACY_VPN_NET_v4 + ADMIN_VPN_NET_v4 + MODERN_VPN_NET_v4
+  - IPv6: NAT66/MASQUERADE für ADMIN_VPN_NET_v6 + MODERN_VPN_NET_v6 (LEGACY bleibt v4-only)
+  - Prinzip: IPv6 wird “wie IPv4” behandelt (kein Sonderregime, gleiche Policy-Logik; nur Address-Family unterscheidet sich technisch)
+
+5.1) NFTABLES (Dualstack NAT, konzeptionell; inet/nat)
+Ziel:
+- v4: masquerade wie bisher
+- v6: NAT66 masquerade analog (Server hat natives IPv6; Clients bekommen feste ULA v6 und egressen über NAT66)
+
+- NAT out ens13:
+  - NAT44 / masquerade: LEGACY_VPN_NET_v4 + ADMIN_VPN_NET_v4 + MODERN_VPN_NET_v4
+  - NAT66 / masquerade: ADMIN_VPN_NET_v6 + MODERN_VPN_NET_v6 (ULA; LEGACY bleibt v4-only)
+
+5.1) NFT (Dualstack NAT, konzeptionell – inet/nat postrouting)
+Ziel:
+- v4: NAT44 masquerade wie bisher
+- v6: NAT66 masquerade analog (ADMIN/MODERN Dualstack)
+- Keine “IPv6 Sonderregeln” auf Policy-Ebene: gleiche Gate/Restricted/Isolation Logik, nur family-spezifische nft Matches.
+
+Kanon-Regelblock (nftables):
+- table inet nat
+  - chain postrouting { type nat hook postrouting priority srcnat; }
+    - oifname "ens13" meta nfproto ipv4 ip saddr { 10.77.16.0/20, 10.77.2.0/24, 10.77.32.0/20 } masquerade
+    - oifname "ens13" meta nfproto ipv6 ip6 saddr @dualstack_v6_prefixes masquerade
+
+Kanon-Primitive für v6 Prefixe (damit B061 “Pool-Prefix” sauber abbildbar ist):
+- set dualstack_v6_prefixes { type ipv6_addr; flags interval; }
+  - enthält die Pool-Prefixe der Dualstack conn_groups (ADMIN/MODERN), z.B. fd77:0:0:2::/64, fd77:0:0:32::/64
+  - LEGACY-Prefixe sind NICHT enthalten (Legacy bleibt v4-only)
+
+Kanon-Block (Beispielstruktur):
+- table inet nat
+  - chain postrouting (hook postrouting priority srcnat)
+    - oifname "ens13" meta nfproto ipv4 ip saddr { 10.77.16.0/20, 10.77.2.0/24, 10.77.32.0/20 } masquerade
+    - oifname "ens13" meta nfproto ipv6 ip6 saddr { fd77:0:0:2::/64, fd77:0:0:32::/64 } masquerade
+
+Validierung (MUST):
+- ADMIN/MODERN Client: v6 “what is my ip” zeigt Server-v6 (NAT66) und v6 routing funktioniert.
+- DNS-Zwang gilt auch v6 (B210), sonst DNS-Leak möglich.
 
 6) MUST
 - Full-tunnel works: default route on clients points to PPP
 - NAT correct
-- D1a: Kein unpoliced window: Solange policy-apply nicht erfolgreich war, muss forward deny-all über connect_pending_v4 greifen.
+- D1a: Kein unpoliced window: Solange policy-apply nicht erfolgreich war, muss forward deny-all über connect_pending_v4 (und bei Dualstack conn_groups zusätzlich connect_pending_v6) greifen.
 
 7) OPTIONEN
 - Separate NAT policies per subnet if needed later.
@@ -76,6 +117,11 @@ NOTES:
 ================================================================================
 CHANGELOG
 ================================================================================
+- v2.0 (2026-01-21): Dualstack-Parity ergänzt: ADMIN/MODERN v6 Forward-Scopes + NAT66/masquerade; Restricted im forward-Pfad auf restricted_v4+restricted_v6 erweitert; DNS-Enforcement Referenz auf SERVICE_DNS v4+v6 gezogen.
+- v1.9 (2026-01-21): Redaktion: Beispielprefixe an B060-SoT angeglichen (fd77:0:0:2::/64, fd77:0:0:32::/64), keine Regeländerung.
+- v1.8 (2026-01-21): Drift-Fix: MODERN_VPN_NET_v6 Output-Prefix korrigiert auf fd77:0:0:32::/64 (SoT: B060).
+- v1.7 (2026-01-21): Dualstack ergänzt: Forward-Allow + Return-Conntrack für v6, NAT66/Masquerade für v6 (ADMIN/MODERN); Restricted_v6 parity + DNS-Enforcement-Referenz v6 präzisiert.
+- v1.6 (2026-01-20): K1-Konsistenz + Drift-Fix: Restricted Enforcement im forward-Pfad als WAN-DROP präzisiert (SERVICE_* Ausnahmen gehören in input gemäß docs/nft_service_ip_scopes.txt); Output-Pools auf LEGACY 10.77.16.0/20 + ADMIN 10.77.2.0/24 + MODERN 10.77.32.0/20 korrigiert; Service-Referenzen auf SERVICE_NET statt „10.77.0.1 als alles“ bereinigt.
 - v1.5 (2026-01-14): Konsistenz: Header-DATUM aktualisiert; ABHÄNGIGKEITEN/Requires an Header angeglichen (B110 ergänzt). Keine Logikänderung.
 - v1.4 (2026-01-10): D1a ergänzt: Connect-Pending Gate (connect_pending_v4) als deny-all forward bis policy-apply SUCCESS; kein Default-Restricted/Portal-Fallback.
 - v1.3 (2026-01-07): T06-Referenz entfernt (Service-IP Scopes jetzt über docs/nft_service_ip_scopes.txt referenziert). Inhalt unverändert.

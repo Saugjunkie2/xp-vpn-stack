@@ -1,8 +1,8 @@
 xp-vpn-stack/README.md
 ================================================================================
 TITLE: xp-vpn-stack (Repository Overview)
-VERSION: v1.0
-DATUM: 2026-01-13
+VERSION: v1.2
+DATUM: 2026-01-20
 STATUS: ACCEPTED
 OWNER-INTENT: Kurzüberblick: Ziel, Struktur, Einstiegspfade und Verweis auf Master/Blocks/Decisions als Spezifikation.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
@@ -40,10 +40,14 @@ The intended outcome is a reproducible server setup where the VPN software provi
 - **“Idiotensicher” client experience**
   - client should only need **FQDN + VPN-credentials (PPP) + PSK**
   - no manual IP/gateway/DNS entry (PPP/IPCP)
-- **Two separated VPN networks**
-  - User-Net: `10.77.10.0/24` (restricted)
-  - Admin-Net: `10.77.20.0/24` (privileged)
-  - Service-IP on loopback: `10.77.0.1/32` (stable anchor for internal services)
+- **Segments (SoT: B060)**
+  - LEGACY (XP/Vista): `10.77.16.0/20` (IPv4-only; PPP/L2TP path)
+  - ADMIN (dualstack, IKEv2): `10.77.2.0/24` + `fd77:0:0:2::/64`
+  - MODERN (dualstack, IKEv2): `10.77.32.0/20` + `fd77:0:0:32::/64`
+  - SERVICE_NET: `10.77.0.0/28` with fixed service anchors:
+    - `SERVICE_DNS 10.77.0.1` (DNS)
+    - `SERVICE_WEB 10.77.0.3` (panel/portal/blockpage + /diag)
+    - `SERVICE_NTP 10.77.0.4` (NTP)
 - **Strict Peer-Isolation** (user clients cannot reach each other)
 - **Server exposure minimized**
   - WAN: only IPsec ports (UDP 500/4500 + ESP)
@@ -55,13 +59,13 @@ The intended outcome is a reproducible server setup where the VPN software provi
   - **DNS enforcement is MUST** (DNAT TCP+UDP 53 from `ppp*` → `10.77.0.1:53`)
 - **Internal webstack**
   - OpenResty (Nginx+Lua) + PHP-FPM + MySQL/MariaDB + phpMyAdmin (admin-only)
-  - webpanel reachable only inside VPN, bound to `10.77.0.1`
+  - webpanel reachable only inside VPN, bound to SERVICE_WEB (10.77.0.3)
 - **HTTPS blockpage with internal CA (MITM)**
-  - blocked domains resolve to `10.77.0.1` (AdGuard “Custom IP”)
+  - blocked domains resolve to SERVICE_WEB (10.77.0.3) (AdGuard “Custom IP”)
   - OpenResty serves HTTP/HTTPS block pages
   - XP browser target: **MyPal** with NSS trust store handling
 - **Time/NTP strategy**
-  - XP time problems handled (pre-/post-connect strategy; optional NTP hijack to `10.77.0.1`)
+  - XP time problems handled (pre-/post-connect strategy; optional NTP hijack to SERVICE_NTP (10.77.0.4))
 ## Onboarding (v2.3)
 - Verify-Wall (App-Layer): Customer PENDING sieht nach Login nur Code/Resend/Support.
 - Verify-Code ist kurzlebig + single-use; persistiert wird nur ein Hash + Ablaufzeit (kein Klartext-Code in SQL).
@@ -79,7 +83,7 @@ The stack intentionally avoids relying on “VPN software features” for contro
 - Routing/NAT/segmentation: **Linux**
 - Policy enforcement: **nftables**
 - QoS: **tc**
-- Services: bound to `10.77.0.1` and firewall-limited
+- Services: bound to SERVICE_* anchors in SERVICE_NET (B060) and firewall-limited (never WAN)
 - AAA/accounting: **SQL + FreeRADIUS** (source of truth)
 - Determinism: **policy-apply + reconcile** (drift-safe)
 
@@ -99,11 +103,11 @@ This is built for selling/supporting XP systems with minimal support overhead an
 - full-tunnel forward + NAT
 - MSS clamping / MTU stability measures
 - outbound abuse blocking (SMTP + SMB/NetBIOS)
-- IPv6 disabled (provider + OS)
+- IPv6 leak-control (LEGACY v4-only; ADMIN/MODERN dualstack per B060; WAN exposure strictly minimized)
 
 ### QoS
 - per-PPP interface shaping via tc
-- default limits by group (User/Admin) and DB-driven parameters
+- default limits by conn_group / segment (LEGACY/ADMIN/MODERN) and DB-driven parameters
 
 ### DNS
 - Unbound (local-only)
@@ -155,7 +159,7 @@ See `B290_PHASE_PLAN_ROLLOUT` and the MASTER file for the authoritative phase pl
 
 ## Status
 
-- Spec baseline: **MASTER v2.4** (inhaltlich fortgeschrieben; Version bump erfolgt separat im Master)
+- Spec baseline: **MASTER v2.5** (inhaltlich fortgeschrieben; Version bump erfolgt separat im Master)
 - Blocks: B010–B343 present (inkl. Session-Control Anchor **B171** sowie Hardening in B150/B165–B169/B330 und Fail2ban/Outcome B340–B343)
 - Decision records: present (u.a. D008 Verify-Wall customer scope, **D010/D011** Reason/Emission, **D012** Session-Control A/B)
 - Templates: present
@@ -175,6 +179,8 @@ See `B290_PHASE_PLAN_ROLLOUT` and the MASTER file for the authoritative phase pl
 ================================================================================
 CHANGELOG
 ================================================================================
+- 2026-01-20 v1.2: Service-Bind-Satz im Design-Prinzip auf SERVICE_* (B060) korrigiert; IPv6-Statement auf Leak-Control/Segment-Scope präzisiert; QoS-Grouping auf conn_group/Segmente (LEGACY/ADMIN/MODERN) gezogen.
+- 2026-01-20 v1.1: K1/B060-SoT übernommen: Segmente (LEGACY/ADMIN/MODERN) + SERVICE_* (DNS/Web/NTP) statt „2 Netze + Service-/32“; Blockpage/Web/NTP Targets auf SERVICE_WEB/SERVICE_NTP gezogen; Status-Baseline auf MASTER v2.5 aktualisiert.
 - 2026-01-13 v1.0: Added Version/Changelog sections (protocol compliance).
 ================================================================================
 

@@ -2,24 +2,24 @@ xp-vpn-stack/blocks/B200_DNS_UNBOUND_ADGUARD.txt
 ================================================================================
 BLOCK-ID: B200
 TITLE: DNS Stack (Unbound + AdGuardHome)
-VERSION: v1.2
-DATUM: 2026-01-07
+VERSION: v1.5
+DATUM: 2026-01-21
 STATUS: ACTIVE
 PRIORITY: SHOULD
-REQUIRES: B150
-INFLUENCES: B220, B230, B240
+REQUIRES: B060, B150, B220, docs/nft_service_ip_scopes.txt
+INFLUENCES: B210, B220, B230, B240
 OWNER-INTENT: Sauberer Resolver + Filter + interne rewrites.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
 NOTES:
-- DNS-Stack ist intern: AdGuardHome bindet auf 10.77.0.1:53, Unbound dient als lokaler Resolver/Upstream.
+- DNS-Stack ist intern im SERVICE_NET: AdGuardHome DNS bindet auf SERVICE_DNS 10.77.0.1:53; Unbound läuft als server-only Upstream auf SERVICE_RESOLVER 10.77.0.2:53 (Clients dürfen Unbound nie direkt erreichen).
 - Kein „User wählt DNS“: Clients sollen DNS nur über den Server nutzen (User-Netz darf nicht frei nach außen resolven).
 - UI/Management (AdGuard UI etc.) ist admin-only; Firewall/Bindings müssen das erzwingen.
 ================================================================================
 
 1) ZWECK
-- Unbound als Resolver (local-only)
-- AdGuardHome als DNS server für clients + blockpage routing
+- Unbound als Resolver (server-only, SERVICE_RESOLVER 10.77.0.2:53; kein Client-Access)
+- AdGuardHome als DNS-Frontend für Clients (SERVICE_DNS 10.77.0.1:53) + Blockpage-Routing auf SERVICE_WEB
 
 2) GRENZEN
 - AdGuard UI ist admin-only.
@@ -29,21 +29,22 @@ NOTES:
 - Influences: B210, B230
 
 4) INPUTS
-- Unbound bind 127.0.0.1:5335 (UDP+TCP)
-- AdGuard bind 10.77.0.1:53 (UDP+TCP), UI 10.77.0.1:2000
-- Upstream of AdGuard = Unbound (127.0.0.1:5335)
-- Server-eigene DNS Queries (OUTPUT): nutzen standardmäßig Unbound direkt (z.B. resolv.conf -> 127.0.0.1, Port 5335 via local stub/resolver-config), nicht DNAT (siehe B210).
+- Unbound bind SERVICE_RESOLVER (10.77.0.2 / fd77:0:0:0::2):53 (UDP+TCP)
+  - Scope: server-only (nur vom Host selbst + von SERVICE_D...1 erreichbar; Clients dürfen 10.77.0.2:53 nie direkt erreichen).
+- AdGuard bind SERVICE_DNS (10.77.0.1 / fd77:0:0:0::1):53 (UDP+TCP), UI (10.77.0.1 / fd77:0:0:0::1):2000 (admin-only)
+- Upstream of AdGuard = Unbound (SERVICE_RESOLVER 10.77.0.2 / fd77:0:0:0::2 :53)
+- Server-eigene DNS Queries (OUTPUT): nutzen Unbound direkt über 10.77.0.2:53 (z.B. resolv.conf -> 10.77.0.2), nicht DNAT (B210 DNAT gilt nur für Client-Traffic).
 
 5) OUTPUTS
 - DNS for user/admin
 - Rewrite:
-  - vpn.status -> 10.77.0.1
-- Blocking mode: Custom IP -> 10.77.0.1
+  - vpn.status -> SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3)
+- Blocking mode: Custom IP -> SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3)
 
 6) MUST (wenn aktiv)
-- DNS (10.77.0.1:53, UDP+TCP) ist für User/Admin/Restricted erreichbar (B210 DNAT + B150 + docs/nft_service_ip_scopes.txt input allowlist).
-- AdGuard UI (10.77.0.1:2000) ist strikt admin-only (Source-IP 10.77.20.0/24 gemäß docs/nft_service_ip_scopes.txt).
-- User/Restricted dürfen 2000 niemals erreichen.
+- DNS (SERVICE_DNS 10.77.0.1 / fd77:0:0:0::1 :53, UDP+TCP) ist für User/Admin/Restricted erreichbar (Enforce via B210 DNAT v4+v6 + B150 + docs/nft_service_ip_scopes.txt input allowlist).
+- AdGuard UI (SERVICE_DNS 10.77.0.1 / fd77:0:0:0::1 :2000) ist strikt admin-only (Source-IP in ADMIN_VPN_NET 10.77.2.0/24 gemäß docs/nft_service_ip_scopes.txt).
+- Clients (User/Admin/Restricted) dürfen SERVICE_RESOLVER (10.77.0.2 / fd77:0:0:0::2 :53) NICHT direkt erreichen (Unbound ist server-only; nur AdGuard/Host darf upstream nutzen).
 
 7) OPTIONAL
 - Multiple profiles per group (user/admin)
@@ -54,13 +55,17 @@ NOTES:
 
 9) TESTS
 - From client: resolve works (UDP) und TCP DNS fallback funktioniert ebenfalls (TCP/53).
-- Blocked domain returns 10.77.0.1 (AdGuard "Custom IP" mode).
-- Restricted client: DNS funktioniert weiterhin (DNAT->10.77.0.1:53; input allowlist erlaubt 53).
-- Admin can open UI (10.77.0.1:2000), user cannot.
+- Blocked domain returns SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3) (AdGuard "Custom IP" mode -> Blockpage/Portal).
+- Restricted client: DNS funktioniert weiterhin (DNAT->SERVICE_DNS 10.77.0.1 / fd77:0:0:0::1 :53; input allowlist erlaubt 53).
+- Negative Test: Client (User/Admin/Restricted) kann SERVICE_RESOLVER (10.77.0.2 / fd77:0:0:0::2 :53) NICHT direkt erreichen (MUSS failen).
+- Admin (Source-IP in 10.77.2.0/24) can open UI (SERVICE_DNS 10.77.0.1 / fd77:0:0:0::1 :2000), user/restricted cannot.
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.5 (2026-01-22): DNS Stack Bindings/Tests auf Dual-Stack (v4+v6) gehoben: SERVICE_DNS/SERVICE_RESOLVER/SERVICE_WEB überall mit v4+v6; DNAT Enforcement explizit v4+v6 referenziert; LEGACY bleibt IPv4-only (DNS parallel/gleichwertig für ADMIN+MODERN).
+- v1.4 (2026-01-20): Symbol-Kanon: SERVICE_UNBOUND -> SERVICE_RESOLVER für 10.77.0.2:53 (server-only) konsistent zu B060 v1.4 + docs/nft_service_ip_scopes.
+- v1.3 (2026-01-20): DNS Stack auf SERVICE_* SoT umgestellt: Unbound -> SERVICE_RESOLVER 10.77.0.2:53 (server-only), AdGuard DNS -> SERVICE_DNS 10.77.0.1:53 (UI 2000 admin-only), Blockpage/Rewrite -> SERVICE_WEB 10.77.0.3; Admin-Only Scope auf 10.77.2.0/24 korrigiert; Tests um Unbound-Negativtest + Blockpage-Ziel ergänzt; Header REQUIRES/INFLUENCES konsistent gemacht.
 - v1.2 (2026-01-07): T06 Referenzen entfernt/ersetzt durch docs/nft_service_ip_scopes.txt (Dependencies + MUST). Inhalt ansonsten unverändert.
 - v1.1: Bindings präzisiert (UDP+TCP) für Unbound/AdGuard; nft-scope Abhängigkeiten (T06/B150) ergänzt; Server-DNS (OUTPUT) Kanon: nutzt Unbound direkt (B210 DNAT gilt nur für Clients); Tests um TCP-DNS + Restricted-Fall erweitert.
 - v1.0: Initial

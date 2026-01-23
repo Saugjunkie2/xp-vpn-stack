@@ -1,0 +1,202 @@
+xp-vpn-stack/blocks/B061_DUALSTACK_SLOT_MAPPING_PANEL_STATS.txt
+================================================================================
+BLOCK-ID: B061
+TITLE: Dualstack Slot-Mapping + Panel-Stats (Thema I)
+VERSION: v1.7
+DATUM: 2026-01-23
+STATUS: ACTIVE
+PRIORITY: MUST
+REQUIRES: B055, B060, B061, B150, B200, B220, B260, 02_GLOSSAR.txt, docs/nft_service_ip_scopes.txt
+INFLUENCES: B030, B050, B066, B150, B155, B166, B270, B310, PH5 Webpanel, PH9 Monitoring/Stats
+OWNER-INTENT: Kanonische Übernahme von Thema I: Dualstack Slot-Mapping (Variante R) + Panel-Stat-Contract (IP Ampel, ONLINE-SoT, Tail-Reserve).
+OWNER: Marco (Owner) + ChatGPT (Co-Architect)
+================================================================================
+
+NOTES:
+- Inhalt ist 1:1 aus ENTWURF „=== I) Dualstack Slot-Mapping + Panel-Stats ===“ übernommen („so wie es ist“).
+- Dieser Block setzt/erweitert DB-SoT (ip_slot, fixed_ipv6, v6_addr_policy) in B055 und ergänzt Glossar-Begriffe (02_GLOSSAR).
+- Panel-Stats-Anteile sind als „später PH9“ markiert (Monitoring/Reporting); der Kanontext ist bereits ab PH5 (Webpanel) normativ, auch wenn die vollständige Stats-Implementierung erst in PH9 erfolgt.
+
+=== I) Dualstack Slot-Mapping + Panel-Stats ===
+
+Ziel: Dualstack (v4+v6) für MODERN/ADMIN konsistent, ohne DHCP-„Randomness“ und ohne SQL-first zu brechen. Gleichzeitig Panel-Stats (IP Ampel, ONLINE) sauber definieren.
+
+Kontext:
+- LEGACY bleibt v4-only (XP/Vista, PPP).
+- MODERN/ADMIN erhalten v4+v6 (ULA fd77:0:0:2::/64 für ADMIN, fd77:0:0:32::/64 für MODERN), damit DNS/Panel/Blockpage dualstack sauber bleiben.
+- IPv6 ist „Policy“, nicht „Provider-Automatismus“. Leaks vermeiden.
+- IP Allocation ist SQL-first und reconcile-bar: Slot-Auswahl random (CSPRNG), Mapping ip_slot→IPs deterministisch (kein „Lease Chaos“).
+
+I.1) Problem: Warum „random“ IPv4 Leases (PPP) schlecht sind
+- Drift: Panel sieht „anderen“ IP als erwartet → IP-bound Login bricht.
+- Abuse: „Connection hopping“ kann ausgenutzt werden, wenn Policies an IP gebunden sind.
+- Debug: Support sieht wechselnde IPs, /diag und Logs werden schwer korrelierbar.
+- SQL-first: „Truth“ darf nicht im Kernel/PPP zufällig entstehen, sondern in DB.
+
+I.2) Grundentscheidung: Variante R (recommended) – Slot-ID als SoT, materialisierte fixed_ip/fixed_ipv6
+- SoT ist eine einzige Zahl: ip_slot (INTEGER) pro vpn_connection.
+- fixed_ip ist materialisiert (computed) aus ip_slot + Pool IPv4 Netz.
+- fixed_ipv6 ist materialisiert (computed) aus ip_slot + Pool IPv6 Prefix.
+- v6_addr_policy: steuert ob IPv6 aktiv ist (NONE|FIXED_SQL — Standard: FIXED_SQL)
+- (optional) pool_id: deterministic mapping of subnet/segment (für UI/Stats)
+- fixed_ip und fixed_ipv6 sind PFLICHT pro Subaccount (Slot-Paar). Sie sind nicht optional und dürfen nicht frei geändert werden; Änderung erfolgt nur durch Admin via Re-Provisioning/Slot-Reassignment.
+- Dualstack-Regel: conn_group=ADMIN und conn_group=MODERN sind immer Dualstack (v4+v6, v6_addr_policy=FIXED_SQL). conn_group=LEGACY bleibt v4-only (v6_addr_policy=NONE).
+
+Begriffe:
+- pool_id: symbolischer Pool-Key (POOL_V4_* / POOL_V6_*) aus conn_group (B058).
+- ip_slot: 1..N, wobei N die Host-Kapazität des IPv4 Pools ist (z.B. /24 => 254, /20 => 4094).
+- Tail-Reserve: Notpuffer am Ende des Slot-Raums, um Deadlocks zu vermeiden.
+
+I.3) Slot-Raum und Ableitungen
+Für einen IPv4 Pool mit Netz A.B.C.D/Prefix:
+- slot 1 entspricht Host +1 (Netzadresse +1)
+- slot 2 entspricht Host +2
+- ...
+- slot N entspricht letzte nutzbare Host-IP (Broadcast -1)
+
+Beispiele (aus B060 Netzplan):
+- ADMIN_VPN_NET_v4 10.77.2.0/24 → Slots 1..254 → 10.77.2.1..10.77.2.254
+- MODERN_VPN_NET_v4 10.77.32.0/20 → Slots 1..4094 → 10.77.32.1..10.77.47.254
+
+IPv6 Ableitung (ULA / Prefix pro Pool; SoT aus B060):
+- ADMIN_VPN_NET_v6:  fd77:0:0:2::/64
+- MODERN_VPN_NET_v6: fd77:0:0:32::/64
+- ip_slot wird deterministisch als Host-Anteil abgeleitet (keine SLAAC, keine Random IID).
+  Beispiel (vereinfachte Darstellung):
+  - ADMIN:  fd77:0:0:2::(ip_slot)
+  - MODERN: fd77:0:0:32::(ip_slot)
+- Wichtig: deterministische Ableitung aus (pool_v6_prefix + ip_slot); keine frei driftenden Leases.
+
+I.4) Datenmodell (SQL-first)
+In vpn_connections:
+- conn_group (LEGACY/MODERN/ADMIN) SoT (B058)
+- pool_id / pool_v6_id: deterministisch aus conn_group (B058); kann als DB-Feld materialisiert sein (Cache), ist aber NICHT optional im logischen Sinne (SoT bleibt conn_group + deterministische Ableitung).
+- ip_slot: SoT, NULL bis Provisionierung
+- fixed_ip: materialisiert aus pool_id + ip_slot
+- fixed_ipv6: materialisiert aus pool_v6_id + ip_slot (nur wenn v6_addr_policy = FIXED_SQL)
+- Norm (Kanon): fixed_ip ist Pflicht pro Verbindung/Subaccount (nicht optional, nicht editierbar).
+  Sobald CLAIMED/active gilt: fixed_ip/fixed_ipv6 sind unveränderlich für diese vpn_connection (1:1 an den Subaccount gebunden).
+- v6_addr_policy: ENUM(NONE|FIXED_SQL)
+- Norm (MUST): fixed_ip ist PFLICHT pro vpn_connection (alle conn_groups), NICHT optional und NICHT editierbar; Bindung ist eindeutig an sub_account/vpn_connection.
+
+Uniqueness-Regel:
+- ip_slot muss innerhalb (pool_id) unique sein, solange Verbindung nicht revoked ist.
+  (Unique Constraint: (pool_id, ip_slot) WHERE revoked_at IS NULL)
+
+Lifecycle:
+- PREPROVISIONED: ip_slot kann bereits gesetzt sein (pre-allocated) oder NULL (lazy alloc).
+- CLAIMED: ip_slot MUSS gesetzt sein (sonst darf PPP nicht hochkommen).
+- DISABLED: ip_slot kann freigegeben werden (revoked), je nach Policy.
+
+I.5) Provisioning/Allocator Flow (idempotent, reconcile-bar)
+Allocator ist server-managed und SQL-first. PPP darf nicht „seine eigene Wahrheit“ erfinden.
+
+Flow (high-level):
+1) Apply/Reconcile (B166) prüft vpn_connection effective_state.
+2) Wenn Connection aktiv/provisionable und ip_slot NULL:
+   - allocate_slot(pool_id):
+     - wählt random freien Slot (CSPRNG) (Anti-Order/Anti-Enumeration) (Thema C / B064)
+     - bounded retries / probing (keine Endlosschleife), respektiert Tail-Reserve (siehe I.6)
+     - schreibt ip_slot + fixed_ip (+ fixed_ipv6 wenn dualstack) atomar
+3) Wenn Connection restricted/disabled:
+   - optional: free_slot (revoked_at setzen) ODER keep_slot (stabil, keine churn) – Policy entscheidet.
+
+Idempotenz:
+- Re-run von Apply darf keine neuen Slots „verbrauchen“, wenn bereits ip_slot gesetzt ist.
+- If DB write fail: keine teilweise Provisionierung.
+
+I.6) Tail-Reserve (Deadlock Prevention)
+Problem:
+- Wenn Pool fast voll ist, können Race-Conditions/partial frees dazu führen, dass der „letzte Slot“ ständig contested wird.
+- Für Admin muss Notfallzugang bestehen.
+
+Regel:
+- Definiere Tail-Reserve pro Pool: - tail_reserve_slots = X (Setting, SQL-first; gemäß B057)
+- Slots (N-X+1 .. N) sind „Reserve“:
+  - für Admin-Only,
+  - oder für Recovery/Break-Glass,
+  - oder als letzte Rettung bei Pool-Exhaustion.
+
+Allocator Verhalten:
+- Normal alloc nutzt nur 1..(N-X)
+- Reserve wird nur genutzt, wenn:
+  a) conn_group=ADMIN ODER
+  b) explicit override (Admin action) ODER
+  c) emergency flag gesetzt (ops-mode), logged.
+
+I.7) IP Ampel (Panel-Stats)
+Panel muss „IP-Health“ anzeigen, ohne falsche Sicherheit zu suggerieren.
+
+Ampel basiert auf IPv4 Slot-Auslastung (pro pool_id):
+- GREEN: free_slots >= green_threshold
+- YELLOW: free_slots < green_threshold und >= red_threshold
+- RED: free_slots < red_threshold
+Thresholds sind Settings (SQL-first):
+- ip_pool_green_threshold
+- ip_pool_red_threshold
+- tail_reserve_slots wird bei free_slots abgezogen (nur allocatable zählt).
+
+Panel Anzeige:
+- pool free/used/allocatable (used excludes revoked; allocatable excludes tail-reserve)
+- Ampel + kurzer Hinweistext
+- Keine exakten IP-Listen im Panel (OPSEC, Enumeration verhindern).
+
+I.8) ONLINE Definition (Panel-Stats)
+ONLINE darf nicht „strongSwan Status“ sein, weil:
+- strongSwan kann Sessions halten, obwohl PPP tot ist.
+- PPP kann kurz flap sein.
+- Accounting ist die einzig konsistente „Userland Truth“ für „online“.
+
+Regel:
+- ONLINE SoT = RADIUS accounting (radacct) + active_session_locks (B055/B056).
+- strongSwan status ist nur debug hint, nicht SoT.
+
+ONLINE = TRUE wenn:
+- last_seen <= online_window_seconds (Settings, SQL-first)
+- und session nicht expired/revoked
+- optional: interim updates müssen innerhalb window liegen.
+
+Edge cases:
+- Interim Updates fehlen (XP client bug): fallback auf stop record / active_session_lock_ttl_seconds (Lock-TTL, SQL-first).
+- Ghost sessions: janitor (B168) räumt auf.
+
+I.9) Race/Failure Cases
+- Pool Exhaustion:
+  - Ampel RED
+  - new allocations fail closed (no PPP)
+  - admin override kann Tail-Reserve nutzen
+- Disk Full / DB down:
+  - No allocation possible → fail closed
+  - existing sessions dürfen optional weiterlaufen (policy), aber keine neuen claims.
+- Partial Claim:
+  - claim writes but ip_slot alloc fails → must rollback or mark as pending with retry.
+- Duplicate allocation:
+  - prevented by unique constraint + transaction retry.
+
+I.10) DoD / Validierung (Thema I)
+- Determinismus: gleiche Connection bekommt immer gleiche IPs (repro).
+- No Random PPP: Framed-IP-Address muss fixed_ip matchen.
+- Dualstack: fixed_ipv6 deterministic, only when v6_addr_policy=FIXED_SQL.
+- Pool Exhaustion: system fails closed, panel shows RED, admin can break-glass.
+- ONLINE correctness: online/offline toggles correct under flap, janitor works.
+- Security: panel does not leak per-user IP lists; no enumeration.
+
+NX-02: B055 Schema erweitern (ip_slot, fixed_ipv6, v6_addr_policy).
+NX-03: Panel Stats Contract (Ampel/ONLINE) in PH9 implementieren (Monitoring/Reporting/Stats).
+NX-04: Allocator/Apply reconcile muss slot alloc idempotent und transactional machen.
+NX-05: Tests in B310 ergänzen (Determinismus, Exhaustion, ONLINE SoT, Tail-Reserve).
+
+================================================================================
+CHANGELOG
+================================================================================
+- v1.7 (2026-01-23): Präzisiert Referenzen: online_window_seconds und tail_reserve_slots werden explizit gemäß B057 (Settings-Kanon) referenziert.
+- v1.6 (2026-01-23): Konsistenz: ONLINE-SoT Referenz auf aktive Locks auf B056 umgehängt; Lock-TTL als active_session_lock_ttl_seconds benannt (keine Semantikänderung).
+- v1.5 (2026-01-22): PH-Mapping auf B290 (PH1–PH10) angepasst: Webpanel als PH5 referenziert, Panel-Stats explizit als PH9 (Monitoring/Stats) markiert; NX-03 entsprechend umgehängt.
+- v1.4 (2026-01-22): DHCPV6_PD aus dem aktiven Kanon entfernt (IPv6 läuft parallel zu IPv4 via FIXED_SQL); v6_addr_policy Optionen auf NONE|FIXED_SQL reduziert.
+- v1.3 (2026-01-21): IPv6 Ableitung auf B060-SoT Prefixe (ADMIN/MODERN) korrigiert; Normsatz ergänzt: fixed_ip ist Pflicht und nach CLAIM unveränderlich (1:1 an Subaccount gebunden).
+- v1.2 (2026-01-21): IPv6-Ableitung an B060-SoT angeglichen (ADMIN fd77:0:0:2::/64, MODERN fd77:0:0:32::/64) + Normschärfe: fixed_ip Pflicht/nicht editierbar; “optional materialisiert” als Cache (nicht logisch optional) präzisiert.
+- v1.1 (2026-01-21): Allocator-Policy angepasst: ip_slot Vergabe = random free slot (CSPRNG) statt lowest available (Konfliktlösung zu Thema C / B064); Mapping bleibt deterministisch.
+- v1.0 (2026-01-21): Neu: Thema I 1:1 aus ENTWURF übernommen (Dualstack Slot-Mapping Variante R + Panel-Stats Contract).
+================================================================================
+END BLOCK B061
+================================================================================

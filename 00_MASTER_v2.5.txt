@@ -31,7 +31,12 @@ OWNER: Marco (Owner) + ChatGPT (Co-Architect)
   - Restricted (Kernel) wird nur durch QUOTA/EXPIRY/MANUAL/UNCLAIMED_OVERDUE ausgelöst, nicht durch Verify.
 
 - Default-WAN-Interface im Konzept: ens13 (falls abweichend: in Assumptions anpassen).
-- IPv6 ist deaktiviert (Provider + OS), um Leaks/Überraschungen zu vermeiden.
+- IPv6-Policy (K1 / B060-SoT):
+  - LEGACY (XP/Vista, PPP/L2TP) bleibt IPv4-only.
+  - ADMIN/MODERN sind Dualstack innerhalb des VPN (IPv4+IPv6, ULA fd77::), um Modern-Paths konsistent zu halten.
+  - WAN/Provider-IPv6 ist kein implizites Feature: Leaks sind zu verhindern (nftables Policy, Forward/Output-Constraints).
+  - Dualstack Slot-Mapping (Thema I / B061): pro vpn_connection gibt es genau einen ip_slot als SoT; daraus werden fixed_ip (v4) und fixed_ipv6 (v6) materialisiert (keine Random-Leases). v6_addr_policy: LEGACY=NONE, ADMIN/MODERN=FIXED_SQL (SQL-first, reconcile-bar).
+  - IP-Lifecycle / Quarantäne / Reconcile (Thema C / B064): Soft-Delete (disabled_at/revoked_at), QUARANTINE_DAYS, random ip_slot Allocation (CSPRNG) + Drift-Guards; verhindert monotone IP-Reihenfolgen ohne Lease-Chaos.
 
 - User dürfen bewusst definierte Web-Services (Panel/Status/Portal/Blockpage) nutzen,
   aber KEINE Admin-Services (SSH, AdGuard UI, phpMyAdmin, DB, etc.).
@@ -77,14 +82,26 @@ OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 - Protokoll: L2TP/IPsec (IKEv1) via strongSwan + xl2tpd + pppd
 - Full-Tunnel: Clients routen kompletten Traffic über VPN-Server
 - IP-Vergabe: PPP/IPCP (keine manuelle IP/GW/DNS am Client)
-- Segmente:
-  - Service-IP: 10.77.0.1/32 auf lo (Bind-Anker für interne Dienste)
-  - User-Netz:  10.77.10.0/24 (verkaufte Geräte)
-  - Admin-Netz: 10.77.20.0/24 (deine Geräte)
+- Segmente (K1 / B060-SoT):
+  - SERVICE_NET_v4: 10.77.0.0/28 (Infra-only)
+  - SERVICE_NET_v6: fd77:0:0:0::/64 (Infra-only)
+  - SERVICE_* (v4+v6 Service-IPs):
+    - SERVICE_DNS:      10.77.0.1  / fd77:0:0:0::1  (AdGuard DNS; UI später admin-only scoped)
+    - SERVICE_RESOLVER: 10.77.0.2  / fd77:0:0:0::2  (Unbound, server-only)
+    - SERVICE_WEB:      10.77.0.3  / fd77:0:0:0::3  (Panel/Portal/Blockpage + /diag)
+    - SERVICE_NTP:      10.77.0.4  / fd77:0:0:0::4  (NTP)
+    - SERVICE_SSH:      10.77.0.5  / fd77:0:0:0::5  (SSH, admin-only)
+    - SERVICE_GW_PPP:   10.77.0.10               (PPP peer/local gateway-Anchor; kein Service-Port-Ziel)
+  - LEGACY_VPN_NET_v4 (Pool): 10.77.16.0/20 (IPv4-only; XP/Vista PPP)
+  - ADMIN_VPN_NET_v4 (Pool):  10.77.2.0/24  (Dualstack via IKEv2)
+  - ADMIN_VPN_NET_v6 (Pool):  fd77:0:0:2::/64
+  - MODERN_VPN_NET_v4 (Pool): 10.77.32.0/20 (Dualstack via IKEv2)
+  - MODERN_VPN_NET_v6 (Pool): fd77:0:0:32::/64
+- IKEv2 Credentials/Gates (Hybrid Gate-0: Server-Zertifikat/Trust für ADMIN+MODERN, kein PSK; Gate-1 connection_login via EAP-MSCHAPv2) inkl. Ops/DoD/Rotation: siehe B059.
 
 - Policy:
   - nftables: WAN minimal offen (UDP 500/4500 + ESP), 1701 nur via IPsec/XFRM,
-    Forward+NAT, Peer-Isolation, Abuse-Outbound-Block, Walled-Garden/Restricted (HARD: QUOTA/EXPIRY/MANUAL/UNCLAIMED_OVERDUE; Verify bleibt App-Layer Verify-Wall)
+    Forward+NAT (IPv4 MASQUERADE + IPv6 NAT66/Masquerade), Peer-Isolation, Abuse-Outbound-Block, Walled-Garden/Restricted (HARD: QUOTA/EXPIRY/MANUAL/UNCLAIMED_OVERDUE; Verify bleibt App-Layer Verify-Wall)
   - tc: Bandbreite pro pppX (CAKE/fq_codel), live drosselbar
   - Fail2ban: Event-Klassifizierung + Jails + Outcome/Reason Codes (B340–B343) für kontrolliertes Ban/Restrict/OK Verhalten
   - Support/Validierung (MUST im Test-/Debug-Kontext): Nachweis per tcpdump/radsniff (z.B. Calling-Station-Id/SrcIP) zur Drift-/Mismatch-Aufklärung (Details: B343/D010).
@@ -94,6 +111,8 @@ OWNER: Marco (Owner) + ChatGPT (Co-Architect)
   - 1 Kunde → n Verbindungen: pro Gerät eigener Sub-Account (unique creds)
   - Simultaneous-Use=1 pro Subaccount (pro Gerät genau eine Session)
   - Stale-Session-Problem wird aktiv gelöst (Janitor + On-demand Login Flow)
+  - Policy-Parameter/Settings sind SQL-first über settings_catalog + settings_* Scopes (Kanon: B057; Schema-SoT: B055); keine Magic Numbers in Code/Configs.
+  - conn_group ist der Primär-Policy-Key (SQL-first) und alle Segment-Ableitungen sind deterministisch (Kanon: B058; Schema-SoT: B055; Segment-Decision: D003); keine Range-/UI-/Protocol-Inference.
 
 - Accounting/Quota (ohne DB-Spam):
   - Runtime-Mapping pppX -> connection_id via /run/vpn-sessions/pppX.env (PPPD_PID + PPP_IF + START_TS)
@@ -112,11 +131,12 @@ OWNER: Marco (Owner) + ChatGPT (Co-Architect)
   - Verify-Wall (App-Layer): Customer PENDING -> nach Login nur Code/Resend/Support (kein Panel-Innenleben).
   - Claim Token (App-Layer): eingeloggter Customer claimed eine VPN-Connection per Token (B155/B280 Regeln).
   - UNCLAIMED Grace/Overdue (Kernel): Unclaimed Connections sind bis unclaimed_grace_until FULL; danach restricted_reason=UNCLAIMED_OVERDUE -> portal-only (B150).
+  - ADMIN-Ausnahme (F6): conn_group=ADMIN wird bei Neu-Verbindungen direkt gebunden/claimed; ADMIN ignoriert Quota/Expiry/UNCLAIMED_OVERDUE (weil diese Gates für Admin nicht greifen). MANUAL Restrict (Not-Aus) gilt weiterhin für alle, inkl. ADMIN; Baseline-Security (DNS-Zwang, Peer-Isolation, Abuse-Outbound-Blocks, RateLimits) bleibt auch für ADMIN aktiv.
   - Admin kann "Grace reset (30 Tage)" auslösen (setzt unclaimed_grace_until neu), danach wieder FULL (sofern kein anderer Restricted-Reason aktiv).
 
 - Webstack intern:
   - OpenResty (Nginx+Lua) + PHP-FPM + DB + phpMyAdmin (admin-only)
-  - Bind nur an 10.77.0.1:80/443, niemals WAN
+  - Bind nur an SERVICE_WEB (10.77.0.3):80/443, niemals WAN, niemals 0.0.0.0
   - Panel-Events triggern vpn-policy-apply (sofortige Durchsetzung)
 
 - DNS ist CORE (MUST, immer):
@@ -125,15 +145,15 @@ OWNER: Marco (Owner) + ChatGPT (Co-Architect)
   - DNS-Zwang per DNAT 53 TCP+UDP ist IMMER aktiv
 
 - HTTPS Blockpage (MITM):
-  - AdGuard Custom-IP auf 10.77.0.1 (HTTP+HTTPS Blockpage)
+  - AdGuard Custom-IP auf SERVICE_WEB (10.77.0.3) (HTTP+HTTPS Blockpage)
   - interne Root-CA; MyPal NSS Import + RateLimit/Cache für On-the-fly Certs
 
 - Zeit/NTP:
-  - Pflicht wegen XP Uhr-Problemen: NTP auf 10.77.0.1, optional NTP-DNAT/Redirect
+  - Pflicht wegen XP Uhr-Problemen: NTP auf SERVICE_NTP (10.77.0.4), optional NTP-DNAT/Redirect
   - Setup-Tool macht Pre-Connect Zeitfix + Post-Connect NTP-Set
 
 - Diagnose:
-  - /diag intern (10.77.0.1) als Supportkiller + Setup-Tool “Test”-Button
+  - /diag intern (SERVICE_WEB 10.77.0.3) als Supportkiller + Setup-Tool “Test”-Button
 
 
 2) BLOCK-LISTE (aktive Spezifikation)
@@ -153,6 +173,7 @@ OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 - B120 nftables Forward + NAT Full-Tunnel
 - B130 nftables Peer Isolation
 - B140 nftables Outbound Abuse Blocks
+- B063 nftables Enforcement / Anti-Scan / Reachability / DNS / Egress (Thema F)
 - B150: Walled Garden / Restricted Mode (Quota/Expiry/Manual + UNCLAIMED_OVERDUE)
 - B155: Onboarding / Verify-Wall / Claim Token
 - B160 tc QoS pro PPP
@@ -184,6 +205,7 @@ OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 - B341 Fail2ban: Jails + Policy Values (Ban/Findtime/Maxretry)
 - B342 Policy Outcome: DENY/RESTRICT/OK + Reason Codes + Matrix
 - B343 Fail2ban + Policy Outcome: E2E Package (Kette + Referenzen)
+- B344 DoD + offene Festzurrungen + Entscheidungen + offene Fragen (Thema J)
 
 3) ABHÄNGIGKEITEN (Text-Graph)
 - B020 -> alle
@@ -225,6 +247,10 @@ OWNER: Marco (Owner) + ChatGPT (Co-Architect)
   - UNCLAIMED Grace/Overdue (Kernel): Unclaimed Connections sind bis unclaimed_grace_until FULL; danach restricted_reason=UNCLAIMED_OVERDUE -> "Nur Panel-Zugriff" (B150).
   - Hard-Stop (MUST): claim_deadline = created_at + 180 Tage (Standard). Wenn nach Ablauf weiterhin UNCLAIMED -> status=DISABLED (HARD; RADIUS reject; kein VPN/kein Panel).
   - Verify ist App-Layer und KEIN Kernel-Restricted Trigger.
+- Provisioning / Promotion-Demotion (Thema D) ist fest:
+  - Promotion (User → Admin): Panel-Admin (Role=ADMIN) provisioniert NEUE vpn_connection(s) mit conn_group=ADMIN (Admin ist eigene Gruppe; kein Upgrade von LEGACY/MODERN).
+  - Demotion (Admin → User): alle ADMIN-Connections werden sofort DISABLED (disabled_at) + revoked (revoked_at), optional Hardcut/Session-Kill; DoD: danach kein Admin-Netz-Traffic mehr.
+  - Kanon-Anker: B280 (Details), Schema/Begriffe: B055 + 02_GLOSSAR, Tests: B310.
 - Hard-Stop gegen „ewige Leichen“ (Standardbetrieb):
   - claim_deadline ist IMMER gesetzt (180 Tage ab Provisioning/Erstellung).
   - Wenn nach Ablauf weiterhin UNCLAIMED -> status=DISABLED (HARD; RADIUS reject; kein VPN/kein Panel).

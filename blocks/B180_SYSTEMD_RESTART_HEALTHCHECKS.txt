@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B180_SYSTEMD_RESTART_HEALTHCHECKS.txt
 ================================================================================
 BLOCK-ID: B180
 TITLE: systemd Auto-Restart + Healthchecks
-VERSION: v1.0
-DATUM: 2026-01-06
+VERSION: v1.1
+DATUM: 2026-01-20
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B040
@@ -38,7 +38,7 @@ NOTES:
 - Healthcheck:
   - ipsec status sanity
   - xl2tpd responsiveness (logs, sockets)
-  - openresty 10.77.0.1 respond
+  - openresty SERVICE_WEB 10.77.0.3 respond
   - db alive
 
 6) MUST
@@ -58,5 +58,6 @@ NOTES:
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.1 (2026-01-20): Healthcheck Web-Target auf SERVICE_WEB 10.77.0.3 korrigiert (B060-SoT).
 - v1.0: Initial
 ================================================================================

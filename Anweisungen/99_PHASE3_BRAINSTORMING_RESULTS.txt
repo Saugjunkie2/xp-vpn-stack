@@ -126,3 +126,11 @@
 ich möchte das das Admin netz von allen restriced Möglichkeiten ausgeschlossen wird, beim admin netz soll es keine Überprüfung von quota etc... geben. 
 Das ist mein eigenes netz, da breauch ich weder restriced Möglichkeiten oder sonst was sonst immer freie fahrt. dennoch muss sich das netz bsp an die dns only regeln halten, wie jede anderes netz auch. 
 ich habe noch im kopf, das wir darüber geredet hatten, ob die ppp verbnidungen von admin und user gleich behandelt werden sollen. Im grunde schon, es kommt halt darauf an, wo man technisch am besten umsetzt, das das admin netz völlig frei vo verboten ist.
+
+
+### 6.4
+ich möchte das bei hardcut wenn ein Account von user auf admin wechselt oder von admin auf user, das zwar neue vpn Connections erstellt werden sollen, aber ich möchte das der benutzername und das Passwort erhaölten bleiben. der grund ist, die einzigen dinge die fest sind, ist benutzername, Passwort und psk. das sollte beim erstellen der neuen vpn Connections berücksichtig werden, beim degradiern bzw befördern, soll ein hardcut der Verbindung gemacht werde und das hat den grund, das beim reconnect sofort die richtigen daten geladen werden. ich möchte das deswegen machen, weill die ips sowieso vom System vergeben werden und die nicht hard in der vpn Verbindung bei dem user Computer eingetragen werden. 
+
+mir ist aufgellen, das die Services nur ipv4 haben, aber keine ipv6 Adressen, das muss geändert werden, da wir dual stack betrieb haben.
+wir brauchen auch einen service_ für ssh.
+ich lese immer mal wieder das supaccount eine feste ip bekommt mit dem Zusatz "optional" das ist nicht optional, das ist flicht jede Verbindung hat eine fste ip und diese kann man auch nicht ändern.

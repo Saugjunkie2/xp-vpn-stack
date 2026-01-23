@@ -2,8 +2,8 @@ xp-vpn-stack/decisions/D001_OPENRESTY_OVER_APACHE.txt
 ================================================================================
 DECISION-ID: D001
 TITLE: OpenResty (Nginx+Lua) statt Apache als Web-Frontend
-VERSION: v1.1
-DATUM: 2026-01-13
+VERSION: v1.2
+DATUM: 2026-01-20
 STATUS: ACCEPTED
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 ================================================================================
@@ -19,7 +19,7 @@ CONTEXT
 - Anforderungen:
   - MUST: On-the-fly Cert Handling möglich, performant, wartbar.
   - MUST: PHP8 Panel nutzbar.
-  - MUST: Nur intern (10.77.0.1) gebunden, niemals WAN.
+  - MUST: Nur intern (SERVICE_WEB 10.77.0.3) gebunden, niemals WAN.
   - SHOULD: Geringer RAM-Footprint (VM).
 
 DECISION
@@ -62,6 +62,7 @@ LINKED BLOCKS
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.2 (2026-01-20): Bind-Anchor von 10.77.0.1 auf SERVICE_WEB 10.77.0.3 (B060-SoT) korrigiert.
 - v1.1 (2026-01-13): Added VERSION header field (protocol compliance).
 - v1.0: initial
 ================================================================================

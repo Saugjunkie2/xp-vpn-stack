@@ -1,174 +1,233 @@
 ================================================================================
-TITLE: Service-IP 10.77.0.1 – nft Scope/Port-Matrix
-VERSION: v1.1
-DATUM: 2026-01-12
+TITLE: Service-Net 10.77.0.0/28 + fd77:0:0:0::/64 – nft Scope/Port-Matrix (SERVICE_*)
+VERSION: v1.10
+DATUM: 2026-01-21
 STATUS: ACCEPTED
 PRIORITY: MUST
-REQUIRES: docs/nft_service_ip_scopes.txt (SoT) + B150 + B200 + B210 (Inputs)
-OWNER-INTENT: Definitive Matrix für erlaubte Services/Scopes an 10.77.0.1; verhindert nft-Drift und Fehl-Exposure.
+REQUIRES: B060 (Netzmodell SERVICE_* / Segmente) + B150 (Restricted Mode) + B200 (DNS Stack Bindings) + B210 (DNAT53) + B220 (Webstack Bind) + B260 (NTP) + B270 (/diag)
+OWNER-INTENT: Definitive Matrix für erlaubte Services/Scopes im SERVICE_NET; verhindert nft-Drift, Fehl-Exposure und „alles auf einer IP“.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 ================================================================================
 
 ================================================================================
 0) ZIEL / KURZBILD
 ================================================================================
-Diese Datei ist die definitive Port-/Scope-Matrix für die Service-IP 10.77.0.1.
+Diese Datei ist die definitive Port-/Scope-Matrix für das SERVICE_NET (10.77.0.0/28)
+und die SERVICE_* Service-IPs (DNS/Web/NTP/Unbound).
+
 Sie beschreibt:
-- Welche Ports sind aus dem VPN erreichbar (VPN input; dst=10.77.0.1)?
+- Welche Ports sind aus den VPN-Segmenten erreichbar (VPN input; dst ∈ SERVICE_NET)?
 - Welche Ports sind admin-only?
 - Welche Einschränkungen gelten im Restricted Mode (Walled Garden)?
 - Wie passt DNS-Enforcement (DNAT 53) in den Pfad (post-DNAT -> filter input)?
 
 WICHTIG (Pfad-Trennung):
-- Traffic zu 10.77.0.1 ist lokales Ziel => nftables filter input.
+- Traffic zu SERVICE_* (dst ∈ 10.77.0.0/28) ist lokales Ziel => nftables filter input.
 - WAN/Internet-Traffic ist Weiterleitung => nftables filter forward.
 
 ================================================================================
-1) KANONISCHE NETZE / ROLLEN
+1) KANONISCHE NETZE / ROLLEN (SoT aus B060)
 ================================================================================
-Service-IP:
-- 10.77.0.1/32 (lo)
+1.1 SERVICE_NET (Infra-only)
+- SERVICE_NET ist das Zielnetz für interne Server-Services (Panel/DNS/NTP/Resolver/SSH).
+- SERVICE_NET_v4: 10.77.0.0/28
+- SERVICE_NET_v6: fd77:0:0:0::/64
 
-VPN Netze:
-- USER_NET:  10.77.10.0/24
-- ADMIN_NET: 10.77.20.0/24
+SERVICE_* IPs (v4/v6):
+- SERVICE_DNS:     10.77.0.1  / fd77:0:0:0::1   (AdGuard DNS + UI)
+- SERVICE_RESOLVER: 10.77.0.2 / fd77:0:0:0::2   (Unbound; server-only)
+- SERVICE_WEB:     10.77.0.3  / fd77:0:0:0::3   (Panel/Portal/Blockpage + /diag)
+- SERVICE_NTP:     10.77.0.4  / fd77:0:0:0::4   (NTP)
+- SERVICE_SSH:     10.77.0.5  / fd77:0:0:0::5   (SSH; ADMIN ONLY)
+- SERVICE_GW_PPP:  10.77.0.10 / fd77:0:0:0::10  (PPP peer/local gateway-Anchor; kein Service-Port-Ziel)
 
-Rollen:
-- USER:    Source-IP in USER_NET (nicht restricted)
-- ADMIN:   Source-IP in ADMIN_NET (nicht restricted)
-- RESTRICTED: Source-IP ist Mitglied der restricted_v4 Set-Logik (Reason: quota/expiry/manual/unclaimed_overdue)
+Hinweis:
+- SERVICE_RESOLVER ist NICHT für Clients gedacht (nur Server/AdGuard).
+- SERVICE_GW_PPP ist kein „Service“ im Sinne von Ports/UI; es ist ein PPP-Anchor (Gateway-Adresse im Legacy-PPP).
 
+1.2 VPN Segmente (Pools)
+- LEGACY_VPN_NET_v4: 10.77.16.0/20          (XP/Vista, L2TP/IPsec, IPv4-only)
+- ADMIN_VPN_NET_v4:  10.77.2.0/24           (Admin, IKEv2, Dualstack)
+- ADMIN_VPN_NET_v6:  fd77:0:0:2::/64
+- MODERN_VPN_NET_v4: 10.77.32.0/20          (Modern, IKEv2, Dualstack)
+- MODERN_VPN_NET_v6: fd77:0:0:32::/64
+
+1.3 Rollen
+- USER:     Source-IP in LEGACY_VPN_NET oder MODERN_VPN_NET (nicht restricted)
+- ADMIN:    Source-IP in ADMIN_VPN_NET (nicht restricted)
+- RESTRICTED: saddr ∈ restricted_v4 bzw. restricted_v6 Set-Logik
+  (Reason: manual_restrict gilt für alle; quota/expiry/unclaimed_overdue/restricted_policy gelten nur für non-ADMIN)
+
+2) SERVICE STACK (BINDINGS) IM SERVICE_NET
 ================================================================================
-2) SERVICE STACK (BINDINGS) AUF 10.77.0.1
-================================================================================
+Hinweis:
+- Alle SERVICE_* Bindings gelten v4+v6 symmetrisch, sofern nicht explizit ausgeschlossen.
+- Notation: v4 (10.77.0.x) und v6 (fd77:0:0:0::x) sind jeweils die Service-IP des gleichen Dienstes.
+
 DNS Stack:
-- AdGuardHome DNS Listener: 10.77.0.1:53 (UDP+TCP)
-- AdGuardHome UI:           10.77.0.1:2000 (TCP)  [ADMIN ONLY]
-- Unbound:                  127.0.0.1:5335 (UDP+TCP)  [nur lokal]
+- AdGuardHome DNS Listener: 10.77.0.1:53 (UDP+TCP) und fd77:0:0:0::1:53 (UDP+TCP)   [SERVICE_DNS]
+- AdGuardHome UI:           10.77.0.1:2000 (TCP) und fd77:0:0:0::1:2000 (TCP)       [ADMIN ONLY]
+- Unbound:                  10.77.0.2:53 (UDP+TCP) und fd77:0:0:0::2:53 (UDP+TCP)   [SERVICE_RESOLVER; NICHT aus VPN-Clients erreichbar]
 
-Panel/Portal:
-- Web: 10.77.0.1:80  (TCP)
-- Web: 10.77.0.1:443 (TCP)
+Panel/Portal/Blockpage:
+- Web: 10.77.0.3:80  (TCP)  und fd77:0:0:0::3:80  (TCP)   [SERVICE_WEB]
+- Web: 10.77.0.3:443 (TCP)  und fd77:0:0:0::3:443 (TCP)   [SERVICE_WEB]
+- /diag liegt auf SERVICE_WEB (10.77.0.3:80/443 bzw. fd77:0:0:0::3:80/443)
 
 Zeit / Stabilität:
-- NTP: 10.77.0.1:123 (UDP)
+- NTP: 10.77.0.4:123 (UDP)  und fd77:0:0:0::4:123 (UDP)   [SERVICE_NTP]
+
+Admin-only Management:
+- SSH: 10.77.0.5:22 (TCP)   und fd77:0:0:0::5:22 (TCP)    [SERVICE_SSH; ADMIN ONLY]
 
 Diagnose:
-- ICMP echo (optional): nur zu/von 10.77.0.1 erlaubt
+- /diag liegt auf SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3) via 80/443
+- ICMP echo (optional): nur zu/von SERVICE_WEB erlaubt (Diagnose-Host), NICHT pauschal für alle Service-IPs
 
 ================================================================================
-3) VPN INPUT SCOPE (filter input)  —  iifname "ppp*"
+3) VPN INPUT SCOPE (filter input) — Ziel: dst ∈ SERVICE_NET
 ================================================================================
 Grundregel:
-- Für Zugriffe auf 10.77.0.1 gilt filter input.
+- Für Zugriffe auf SERVICE_* gilt nftables filter input (lokales Ziel).
 - Im Restricted Mode MUSS die Allowlist auch im input enforced werden (sonst bleiben lokale Ports offen).
 
-3.1 USER (10.77.10.0/24), NICHT restricted
-ALLOW zu 10.77.0.1:
-- TCP 80    (Panel/Portal)
-- TCP 443   (Panel/Portal)
-- UDP 53    (DNS)
-- TCP 53    (DNS TCP fallback)
-- UDP 123   (NTP)
-- ICMP echo (optional, nur zu 10.77.0.1)
+3.1 USER (LEGACY + MODERN), NICHT restricted
+ALLOW zu SERVICE_*:
+- SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3):
+  - TCP 80
+  - TCP 443
+- SERVICE_DNS (10.77.0.1 / fd77:0:0:0::1):
+  - UDP 53
+  - TCP 53 (DNS TCP fallback)
+- SERVICE_NTP (10.77.0.4 / fd77:0:0:0::4):
+  - UDP 123
 
-DENY zu 10.77.0.1:
-- TCP 2000  (AdGuard UI)  [verboten für USER]
-- alle anderen lokalen Ports (z.B. tcp/22 SSH, DB, phpMyAdmin, etc.)
+DENY zu SERVICE_*:
+- SERVICE_DNS UI: TCP 2000 (AdGuard UI)  [verboten für USER]
+- SERVICE_RESOLVER: UDP/TCP 53 zu 10.77.0.2 / fd77:0:0:0::2 MUSS blockiert sein (Clients dürfen Resolver nicht direkt erreichen)
+- SERVICE_SSH: TCP 22 zu 10.77.0.5 / fd77:0:0:0::5 MUSS blockiert sein (SSH ist ADMIN ONLY)
+- alle anderen lokalen Ports im SERVICE_NET (DB, phpMyAdmin, ssh, etc -> MUSS blockiert sein)
 
-3.2 ADMIN (10.77.20.0/24), NICHT restricted
-ALLOW zu 10.77.0.1:
+3.2 ADMIN (ADMIN_VPN_NET), NICHT restricted
+ALLOW zu SERVICE_*:
 - alles wie USER
-- PLUS: TCP 2000 (AdGuard UI)  [ADMIN ONLY]
+- PLUS: SERVICE_DNS UI: TCP 2000 (AdGuard UI)  [ADMIN ONLY]
+- PLUS: SERVICE_SSH (10.77.0.5 / fd77:0:0:0::5): TCP 22  [ADMIN ONLY]
 
 DENY:
-- alle anderen lokalen Ports, die nicht explizit erlaubt sind (least privilege)
+- SERVICE_RESOLVER bleibt für Admin ebenfalls server-only (kein Client-Access auf 10.77.0.2:53)
+- alle anderen Ports im SERVICE_NET (insb. SERVICE_SSH tcp/22 -> MUSS blockiert sein)
 
-3.3 RESTRICTED (egal ob USER/ADMIN, wenn saddr ∈ restricted_v4)
-STRICT ALLOWLIST zu 10.77.0.1:
-- TCP 80
-- TCP 443
-- UDP 53
-- TCP 53
-- UDP 123
-- ICMP echo (optional, nur zu 10.77.0.1)
+3.3 RESTRICTED (egal ob LEGACY/ADMIN/MODERN, wenn saddr ∈ restricted_* Sets)
+STRICT ALLOWLIST im SERVICE_NET:
+- SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3): TCP 80, TCP 443
+- SERVICE_DNS (10.77.0.1 / fd77:0:0:0::1): UDP 53, TCP 53
+- SERVICE_NTP (10.77.0.4 / fd77:0:0:0::4): UDP 123
 
 STRICT DENY:
-- TCP 2000 (AdGuard UI) ist weiterhin ADMIN ONLY (restricted darf nie UI sehen)
-- alle anderen Ports zu 10.77.0.1 (insb. tcp/22 SSH -> MUSS blockiert sein)
+- TCP 2000 (AdGuard UI) bleibt ADMIN ONLY; restricted darf UI nie sehen
+- SERVICE_RESOLVER (10.77.0.2:53) bleibt server-only; restricted darf es nie erreichen
+- alle anderen Ports im SERVICE_NET (insb. tcp/22 SSH -> MUSS blockiert sein)
 
 ================================================================================
-4) VPN FORWARD SCOPE (filter forward) — iifname "ppp*" -> oifname "ens13"
+4) VPN FORWARD SCOPE (filter forward) — Source: VPN Segmente -> WAN
 ================================================================================
 4.1 USER/ADMIN (nicht restricted)
 - Full-Tunnel: WAN forward ist erlaubt + NAT/Masquerade aktiv.
+- Gilt für LEGACY/ADMIN/MODERN gleichermaßen, sofern nicht restricted.
 
 4.2 RESTRICTED
 - WAN forward MUSS gedroppt werden (kein Internet).
-- Im Restricted Mode darf praktisch nur 10.77.0.1 (Panel/DNS/NTP) erreicht werden.
-  Hinweis: 10.77.0.1 ist lokal => das ist input, nicht forward.
+- Im Restricted Mode darf praktisch nur SERVICE_* (Panel/DNS/NTP) erreicht werden.
+  Hinweis: SERVICE_* ist lokal => das ist input, nicht forward.
 
 ================================================================================
 5) DNS ENFORCEMENT (DNAT53) — nat prerouting
 ================================================================================
 Ziel:
-- Client kann DNS nicht "wegkonfigurieren".
-- Alle DNS Queries (UDP+TCP/53) aus dem VPN werden auf 10.77.0.1:53 umgebogen.
+- Client kann klassisches DNS nicht "wegkonfigurieren".
+- Alle DNS Queries (UDP+TCP/53) aus den VPN-Segmenten werden auf SERVICE_DNS (10.77.0.1:53) umgebogen.
 
-Regel (KANONISCH):
-- iifname "ppp*" udp dport 53 -> dnat to 10.77.0.1:53
-- iifname "ppp*" tcp dport 53 -> dnat to 10.77.0.1:53
+IPv4 Regel (KANONISCH):
+- (VPN ingress) udp dport 53 -> dnat to 10.77.0.1:53
+- (VPN ingress) tcp dport 53 -> dnat to 10.77.0.1:53
 
 WICHTIG (Pfad nach DNAT):
 - Nach DNAT ist dst=10.77.0.1:53 => filter input.
 - Daher muss input-allowlist (Kapitel 3) UDP+TCP 53 erlauben (auch im Restricted Mode).
 
+IPv6 Hinweis (Dualstack ADMIN/MODERN):
+- Kanon: IPv6 ist global aktiv für ADMIN/MODERN; LEGACY bleibt v4-only.
+- DNS-Enforcement wird family-parallel gespiegelt:
+  - IPv4: DNAT UDP/TCP 53 -> 10.77.0.1:53
+  - IPv6: DNAT UDP/TCP 53 -> fd77:0:0:0::1:53
+- Zusätzlich gilt Full-Tunnel via NAT66/Masquerade für ADMIN/MODERN, damit IPv6 wie IPv4 Internet-Egress hat.
+- Diese Matrix setzt die Scope-Erwartung; die konkreten DNAT53-v6 Regeln stehen in B210.
+
 Server-eigene DNS Queries (OUTPUT):
 - DNAT gilt nicht für OUTPUT.
-- Kanon: Server nutzt Unbound direkt (lokal) als Resolver; Client-DNS bleibt via DNAT immer AdGuard.
+- Kanon: Server/AdGuard sprechen Unbound als upstream; Clients sprechen via DNAT immer AdGuard (SERVICE_DNS).
 
 ================================================================================
 6) KOMPAKT-ALLOWLIST (RESTRICTED MODE)
 ================================================================================
-RESTRICTED MODE MUSS (zu 10.77.0.1):
-- TCP: 80, 443
-- UDP: 53, 123
-- TCP: 53
-- ICMP: echo-request/echo-reply (optional)
+RESTRICTED MODE MUSS (SERVICE_NET):
+- SERVICE_WEB (10.77.0.3): TCP 80, 443
+- SERVICE_DNS (10.77.0.1): UDP 53, TCP 53
+- SERVICE_NTP (10.77.0.4): UDP 123
+- ICMP: echo-request/echo-reply (optional, nur zu 10.77.0.3)
 
 RESTRICTED MODE MUSS NICHT (und darf nicht):
 - TCP 2000 (AdGuard UI) außer Admin (und i.d.R. nicht restricted)
+-  SERVICE_RESOLVER (10.77.0.2:53) für Clients
 - irgendwelche anderen lokalen Ports (SSH, DB, phpMyAdmin, etc.)
 - irgendein WAN forward ins Internet
 
 ================================================================================
 7) ACCEPTANCE TESTS (messbar)
 ================================================================================
-Input / Service-IP Tests:
-- USER erreicht 10.77.0.1:443 + 10.77.0.1:80.
-- USER DNS funktioniert via UDP und via TCP fallback (tcp/53).
-- USER kann 10.77.0.1:2000 NICHT öffnen.
-- ADMIN kann 10.77.0.1:2000 öffnen.
-- RESTRICTED erreicht weiterhin 10.77.0.1:443/80 + DNS (udp/tcp 53) + NTP (udp 123).
-- RESTRICTED erreicht NICHT tcp/22 auf 10.77.0.1 (SSH muss blockiert sein).
+Input / SERVICE_* Tests:
+- USER (LEGACY/MODERN) erreicht SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3):443 + :80.
+- USER DNS funktioniert via UDP und via TCP fallback (dst=SERVICE_DNS 10.77.0.1 / fd77:0:0:0::1 :53).
+- USER kann AdGuard UI (SERVICE_DNS 10.77.0.1 / fd77:0:0:0::1 :2000) NICHT öffnen.
+- ADMIN kann AdGuard UI (SERVICE_DNS 10.77.0.1 / fd77:0:0:0::1 :2000) öffnen.
+- RESTRICTED erreicht weiterhin (v4+v6):
+  - SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3):443/80
+  - SERVICE_DNS (10.77.0.1 / fd77:0:0:0::1):53 (udp+tcp)
+  - SERVICE_NTP (10.77.0.4 / fd77:0:0:0::4):123/udp
+- RESTRICTED erreicht NICHT tcp/22 im SERVICE_NET (SSH muss blockiert sein; SERVICE_SSH 10.77.0.5 / fd77:0:0:0::5).
+- Weder USER noch ADMIN noch RESTRICTED können SERVICE_RESOLVER (10.77.0.2 / fd77:0:0:0::2 :53) direkt erreichen (MUSS failen).
 
-DNS Enforcement Tests:
+DNS Enforcement Tests (IPv4+IPv6):
 - Client setzt DNS manuell auf 8.8.8.8 -> trotzdem wird DNS via DNAT auf 10.77.0.1:53 umgeleitet.
 - Gleiche Prüfung im Restricted Mode (muss weiter funktionieren).
 
 Forward/WAN Tests:
 - USER/ADMIN (nicht restricted): Internet funktioniert (Full-Tunnel).
-- RESTRICTED: Internet geht NICHT (WAN forward drop), aber Panel/DNS/NTP gehen.
+- RESTRICTED: Internet geht NICHT (WAN forward drop), aber SERVICE_* gehen.
 
 ================================================================================
 8) REFERENZEN (Konzeptdateien)
 ================================================================================
+- B060: Netzmodell (SERVICE_NET + SERVICE_* + LEGACY/ADMIN/MODERN Segmente)
 - B150: Restricted Mode / Walled Garden (Allowlist + input/forward Enforcement)
 - B210: DNS Enforcement DNAT53 (udp+tcp)
-- B200: DNS Stack Unbound + AdGuard (Bindings + UI admin-only)
+- B200: DNS Stack Unbound + AdGuard (Bindings + UI admin-only + Unbound upstream)
+- B220: Webstack (Bind auf SERVICE_WEB 10.77.0.3 / fd77:0:0:0::3)
+- B260: NTP Strategie (SERVICE_NTP 10.77.0.4 / fd77:0:0:0::4)
+- B270: /diag Endpoint (SERVICE_WEB 10.77.0.3 / fd77:0:0:0::3)
 
 ================================================================================
 9) CHANGELOG
 ================================================================================
+- v1.10 (2026-01-22): Acceptance Tests/Referenzen auf Dual-Stack (v4+v6) gehärtet (SERVICE_WEB/SERVICE_DNS/SERVICE_NTP/SERVICE_RESOLVER); DNS Enforcement Tests als IPv4+IPv6 markiert (IPv6 parallel/gleichwertig für ADMIN+MODERN; LEGACY bleibt v4-only).
+- v1.9 (2026-01-21): SERVICE_SSH (v4+v6) ergänzt; Service-Bindings/Scopes in Kapitel 2 auf Dualstack gezogen (v4+v6 Targets), damit DNS/Web/NTP/SSH parity konsistent dokumentiert ist.
+- v1.8 (2026-01-21): SERVICE STACK (BINDINGS) Abschnitt auf Dualstack-Notation erweitert (v4+v6 Listener explizit), ohne Scope/Policy zu ändern.
+- v1.7 (2026-01-21): SERVICE_SSH (v4/v6) als Zone-0-Service ergänzt (ADMIN ONLY); Service-Allow/Deny-Listen auf v4/v6 Ziele vereinheitlicht; IPv6 DNS-Enforcement Hinweis auf Kanon aktualisiert (DNAT53 v6 + NAT66 für ADMIN/MODERN; LEGACY v4-only).
+- v1.6 (2026-01-21): SERVICE_SSH (Zone 0) ergänzt und ADMIN-Scope um SSH erweitert; Restricted-Deny präzisiert.
+- v1.5 (2026-01-20): Rest-Drift bereinigt: SERVICE_UNBOUND -> SERVICE_RESOLVER in Kapitel 6 + Acceptance Tests; Tippfehler udp+tcpp -> udp+tcp korrigiert.
+- v1.4 (2026-01-20): SoT=002/003: MODERN_VPN_NET_v6 auf fd77:0:0:32::/64 angehoben; SERVICE_UNBOUND Symbolname auf SERVICE_RESOLVER konsolidiert; IPv6 DNS-Hinweisadresse auf fd77:0:0:0::1:53 korrigiert.
+- v1.3 (2026-01-20): K1-Konsistenz: SERVICE_NET_v6 Notation auf fd77:0:0:0::/64 normalisiert; ADMIN/MODERN v6 Prefixe auf fd77:0:0:2::/64 und fd77:0:0:3::/64; MODERN_VPN_NET_v4 Pool auf 10.77.32.0/20 korrigiert; SERVICE_GW_PPP (10.77.0.10) als PPP-Anchor ergänzt (kein Service-Port-Ziel).
+- v1.2 (2026-01-20): Komplett ersetzt: Umstellung von „Single Service-IP 10.77.0.1“ auf SERVICE_NET/SERVICE_* Matrix (DNS .1, Unbound .2 server-only, Web .3, NTP .4) + Segmente LEGACY/ADMIN/MODERN gemäß 001/002/003-SoT; Self-REQUIRES entfernt; Acceptance Tests erweitert.
 - v1.1 (2026-01-12): T06-Referenzen entfernt (Tasks werden gelöscht); SOURCE als „Doc ist SoT“ präzisiert; Header aktualisiert.
 - v1.0 (2026-01-07): Neu angelegt (Service-IP Scope Matrix).

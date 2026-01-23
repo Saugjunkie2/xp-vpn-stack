@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B155_Onboarding_Verify-Wall_Claim_Token.txt
 ================================================================================
 BLOCK-ID: B155
 TITLE: Onboarding / Verify-Wall / Claim Token
-VERSION: v2.7
-DATUM: 2026-01-14
+VERSION: v2.8
+DATUM: 2026-01-22
 STATUS: ACTIVE
 OWNER: Marco
 OWNER-INTENT: Minimaler Support + verifizierbare Kontakt-Email. Panel-Innenleben erst nach Email-Code-Verifikation; Claim nur nach Verifikation und nur per Claim-Token (keine VPN-Client-Credentials nötig).
@@ -111,6 +111,7 @@ NOTES:
   - Redirect ins Panel-Innenleben
 
 6.3 Claim (MUST: erst nach Verify + Token)
+- Scope: Claim-Flow gilt nur für Customer/Non-Admin (conn_group != ADMIN). ADMIN-Connections sind pre-claimed/bound und nutzen keinen Claim-Token-Mechanismus.
 - Claim ist nur erlaubt, wenn:
   - Account ACTIVE ist (email_verified_at gesetzt)
   - User eingeloggt ist
@@ -143,6 +144,7 @@ NOTES:
 - Zweck von UNCLAIMED_OVERDUE:
   - Nach 30 Tagen ohne Claim wird der Client auf "Panel-only" gesetzt, damit Verify + Claim auch ohne Internet weiterhin möglich sind.
 - Verify-Wall ist App-Layer und unabhängig vom nftables Restricted Set.
+- Scope-Klarstellung (Kanon): Dieser Block beschreibt Customer-Onboarding (conn_group != ADMIN). ADMIN-Verbindungen werden opsseitig direkt gebunden/CLAIMED (kein UNCLAIMED/OVERDUE-Pfad); Manual Restrict (Not-Aus) bleibt für ALLE conn_groups separat über B150/nft/tc aktiv.
 
 8) HARD STOP (Standardbetrieb: MUST)
 - claim_deadline ist im Standardbetrieb IMMER gesetzt: 180 Tage ab Provisioning/Erstellung (created_at).
@@ -203,6 +205,7 @@ CHANGELOG
 ================================================================================
 HINWEIS: Der Changelog kann historische Begriffe enthalten. Maßgeblich ist der aktuelle Blocktext/Glossar.
 
+- v2.8 (2026-01-22): Kanon-Klarstellung zu F6: Verify/Claim/UNCLAIMED_OVERDUE gilt nur für Customer (non-admin); ADMIN ist opsseitig direkt gebunden/CLAIMED; Manual Restrict bleibt für alle conn_groups gültig.
 - v2.7 (2026-01-14): Wording-Fix in NOTES: Verify-Wall als App-Layer klargestellt; keine implizite Kopplung/„Ersatz“ von nftables-Gates (Kernel-Restricted bleibt separat, siehe B150/B050/B166).
 - v2.6 (2026-01-14): Begriffe ergänzt: Verify-Code (email_verify_code) benannt; Claim-Prozess präzisiert: claim_token_hash statt unqualifiziertem Token_hash; Changelog-Terminologie: „Codes“ statt „Tokens“.
 - v2.5 (2026-01-14): display_name (UI-only, max 40, Fallback=email) im Onboarding verankert; subaccount_login kanonisiert (vpn_ + base32(a-z2-7) + 16, ^vpn_[a-z2-7]{16}$), system-generated/non-enumerable; Panel zeigt subaccount_login read-only.

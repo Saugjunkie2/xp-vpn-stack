@@ -1,0 +1,95 @@
+xp-vpn-stack/blocks/B058_CONN_GROUP_POLICYKEY_DETERMINISTIC_DERIVATIONS.txt
+================================================================================
+BLOCK-ID: B058
+TITLE: conn_group Policy-Key / SoT / deterministische Ableitungen (Thema A)
+VERSION: v1.0
+DATUM: 2026-01-21
+STATUS: ACTIVE
+PRIORITY: MUST
+REQUIRES: B055, D003, 02_GLOSSAR
+INFLUENCES: B030, B050, B150, B155, B166, B270, B285, B310
+OWNER-INTENT: Kanonische Festlegung, dass conn_group der Primärschlüssel der Policy ist und alle Ableitungen deterministisch sind (SQL-first; keine UI-/IP-Sonderlogik).
+OWNER: Marco (Owner) + ChatGPT (Co-Architect)
+
+NOTES:
+- Inhalt ist 1:1 aus ENTWURF „=== A) Policy-Key, SoT, deterministische Ableitungen ===“ übernommen („so wie es ist“).
+- Schema-SoT bleibt B055; D003 setzt die Segment-Entscheidung (LEGACY/MODERN/ADMIN); dieser Block fixiert die Ableitungs-/SoT-/Gate-Normen.
+
+================================================================================
+
+=== A) Policy-Key, SoT, deterministische Ableitungen ===
+
+0) Primärer Policy-Key (Kanon): conn_group (LEGACY/MODERN/ADMIN)
+
+Prinzip (MUST):
+- Der Primärschlüssel für Policy-Entscheidungen ist conn_group.
+- conn_group ist eine Eigenschaft der vpn_connection (pro Gerät), nicht des Kunden.
+- conn_group ist SQL-first SoT (B055.vpn_connections.conn_group), NOT NULL.
+- Niemals „aus IP-Ranges ableiten/erraten“ (kein Hidden Inference).
+- Niemals „aus UI-Buttons ableiten/erraten“ (UI kann conn_group anzeigen, nicht definieren).
+- Niemals „aus Protocol ableiten/erraten“ (L2TP/IPsec/WG sind Stack-Details, nicht Segment-SoT).
+- conn_group treibt:
+  - IP-Pool Auswahl
+  - nftables Scopes (Service allowlists, admin-only tools isolation)
+  - tc/QoS profiles
+  - /diag output & Panel Status (Segmentanzeige)
+  - Default restrictions / Walled Garden Mapping (per Segment)
+  - Legacy-Kompatibilitätspfade (XP Constraints)
+
+Warum (Begründung):
+- Nur so ist das System driftarm und auditierbar: ein Feld, eine Bedeutung.
+- Kein „magisches Routing“ oder „Range-Tricks“ in Implementierung.
+- Segmentwechsel ist eine SQL-Operation (admin-only), nicht ein Nebenprodukt von IP/Protocol/Client.
+
+1) Deterministische Ableitungen (MUST): aus conn_group → derived_policy
+
+Definition (MUST):
+- Aus conn_group werden deterministisch abgeleitet (derived_policy):
+  - ip_stack: v4_only | dualstack
+  - ipv4_pool_key: POOL_V4_LEGACY | POOL_V4_MODERN | POOL_V4_ADMIN
+  - ipv6_pool_key: POOL_V6_MODERN | POOL_V6_ADMIN | (none für LEGACY)
+  - nft_scope: scope_legacy | scope_modern | scope_admin
+  - tc_profile: tc_legacy | tc_modern | tc_admin
+  - diag_visibility: diag_user | diag_admin (nicht identisch mit Panel Role!)
+  - default_restriction_mode: (z.B. walled_garden_profile) — per Segment definierbar
+
+MUST-Regeln:
+- Diese Ableitungen sind:
+  - total (für alle conn_group definiert)
+  - deterministisch (keine random/hidden branching)
+  - versionierbar (Schema-Version in /diag)
+- derived_policy ist nicht direkt „User-editable“.
+- derived_policy kann als Debug/Observability im /diag sichtbar sein.
+
+DoD (Validierung):
+- Für jede conn_group existiert ein Test (B310): expected ip_stack/pools/scopes stimmen.
+- Negative Test: Manipulation an fixed_ip oder Protocol ändert derived_policy NICHT.
+- /diag zeigt conn_group + derived_policy, damit Support deterministisch debuggen kann.
+
+2) Verify (Panel User) vs AAA (VPN AuthN): Trennung der Ebenen (MUST)
+
+Klarstellung (MUST):
+- Verify (email_verified_at) ist ein App-Layer Gate für Panel-User.
+- Verify hat keine direkte Auswirkung auf AAA/VPN-AuthN.
+- AAA/VPN-AuthN wird über:
+  - vpn_connection status (PREPROVISIONED/CLAIMED/DISABLED)
+  - restricted_effective / reason (Kernel Policy)
+  - RADIUS/SQL SoT (B055/B056)
+  entschieden.
+
+Konsequenzen (MUST):
+- Ein unverified Panel-User kann keine Claim/Action durchführen.
+- Eine preprovisioned vpn_connection kann existieren, ohne dass ein Panel-User verified ist.
+- Claim ist an Verified gebunden (Verify-Wall), nicht das „Existieren“ der Connection.
+- conn_group ist unabhängig von Verify (Verify darf conn_group nicht beeinflussen).
+
+DoD:
+- Tests (B310) belegen: Unverified Panel blockt Claim/Actions, aber erzeugt keine AAA-Bypass/Leak.
+
+================================================================================
+CHANGELOG
+================================================================================
+- v1.0 (2026-01-21): Neu: Thema A als eigener Kanon-Block (conn_group als Primär-Policy-Key; deterministische Ableitungen; Verify-Klarstellung; Guardrails).
+================================================================================
+END BLOCK B058
+================================================================================

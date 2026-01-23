@@ -1,0 +1,65 @@
+TAGESZIEL (heute) — PH1 Richtung 100% (Kanon-/DoD-Closure)
+
+Fakten (Basis / was heute festgezurrt wurde)
+F1) Exposure-by-Binding ist das Primärmodell (WireGuard-Prinzip)
+  - WAN-“Closed” primär durch Nicht-Binden an WAN (0.0.0.0/::), nicht durch pauschales Host-DROP.
+  - Exponiert ist nur, was absichtlich auf WAN bindet (VPN-Endpunkte).
+  - nftables/WAN-Stealth (DROP/FILTERED) ist optionaler Zusatzschutz, nicht Voraussetzung.
+
+F2) Server-Sphäre vs Client-Bubble sind getrennte Policy-Domänen
+  - Server-Sphäre: INPUT/OUTPUT (Host, lokale Dienste/Prozesse).
+  - Client-Bubble: FORWARD + NAT (PREROUTING/POSTROUTING) + XFRM-Pfade (IKEv2/IPsec) für Client-Traffic.
+  - “Default-Deny” ist primär Client-Bubble-Doktrin (VPN-Client-Policies), nicht pauschaler Host-DROP.
+
+F3) WAN-Minimal-Exposure: dauerhaft nur VPN-Endpunkte
+  - Von außen dauerhaft erreichbar sind nur VPN-Endpunkte (IPsec: UDP 500/4500 + ESP; WG: WG-UDP-Port).
+  - Alles andere ist nicht OPEN (CLOSED/FILTERED ok, aber nicht OPEN).
+  - Admin/Panel/DB/SSH müssen nie über WAN exposed sein (Binding-Regel).
+
+F4) Hybrid Gate-0 ist verbindlich
+  - LEGACY: Gate-0 = PSK (IKEv1/L2TP) + danach User/Pass (wie gehabt).
+  - ADMIN/MODERN (IKEv2): Gate-0 = Server-Zertifikat/Trust (Public CA; konkret Let’s Encrypt), kein PSK.
+  - Gate-0 ist nur Transport-Trust, ersetzt keine Identität.
+
+F5) Kein Client-Zertifikat
+  - ADMIN/MODERN nutzt kein Client-CA-/Client-Zertifikat-Modell.
+  - Client validiert nur Server-Zertifikat + Hostname/FQDN + Trust-Chain (Public CA Store). Optional Pinning: heute nicht entschieden.
+
+F6) Gate-1 bleibt unverändert: Username/Password ist Pflicht
+  - Gate-1 = connection_login (Username/Password) via EAP/RADIUS (SQL-first).
+  - Fail-Closed:
+    • Gate-0 fail → kein Tunnel.
+    • Gate-0 ok, Gate-1 fail → keine Policy/kein Internet.
+    • Gate-0 ok, Gate-1 ok → Policy deterministisch aus SQL.
+
+F7) DoD/Validierung ist konkret: “nicht OPEN” + Gate-0/Gate-1 Trennung
+  - WAN-Scan: nur VPN-Endpunkte dürfen OPEN sein; Rest CLOSED/FILTERED ok, aber nicht OPEN.
+  - IKEv2 Tests ersetzen PSK durch Cert/Trust:
+    • Untrusted/invalid/expired Server-Cert → Gate-0 FAIL
+    • Trusted Server-Cert + falsches Passwort → Gate-1 FAIL
+    • Trusted Server-Cert + korrektes Passwort → OK + Policy Apply
+
+F8) Let’s Encrypt ist als konkrete Gate-0-CA-Wahl gesetzt
+  - “Server-CA” = Public CA Chain (Let’s Encrypt) fürs Server-Zertifikat.
+  - Client vertraut via normalem Trust Store, nicht via private Client-CA.
+
+F9) Cert-Renewal darf das Exposure-Modell nicht dauerhaft aufweichen
+  - Renewal ist Pflicht (kurzlebige Public-CA Certs).
+  - Keine dauerhaft zusätzlichen WAN-Ports nur wegen Renewal.
+  - Challenge-Verfahren/Port-Strategie ist eigenes Ops-Thema; heute nur der Grundsatz.
+
+Heute erledigt (Ergebnisstand)
+E1) NX-04/NX-05 geschlossen und eingepflegt (IKEv2 Wiring via VICI + Debounce; Session-Mapping/Kill; Pending TTL als Setting; Kill-on-expire; IPv6-only Robustheit) — B166/B167 + Dependencies (B057/B168) konsistent.
+E2) PH1-DoD-Widerspruch “IPv6 default-deny vs NAT66” aufgelöst durch präzisen Test-Semantik-Fix: Fail-Closed pre-apply, NAT66/Masquerade post-apply, kein “IPv6-frei”.
+E3) PH1-Closure im Testkatalog ergänzt: Full-Tunnel (v4+v6, no split leak), Peer-Isolation (v4+v6), v4/v6 Policy-Parität (kein v6 bypass) — B310 v1.22.
+
+Offen (heute noch zu schließen, damit PH1 formal 100% wird)
+O1) PH1 Closure Full nach B290-REQUIRES ist noch unvollständig, weil nicht alle Required-Blöcke im aktuellen Verify-Batch vorliegen (B290 listet “Requires: all”; für “Closure Full” müssen die fehlenden B0xx/B1xx/B2xx/B3xx Blöcke hochgeladen/validiert werden).
+O2) Nach Upload der fehlenden Required-Blöcke: Phase 4b VERIFY “PH1 Closure Full” (nur Abgleich) → Fundstellenliste.
+O3) Danach (nur wenn Fundstellen existieren): Phase 4a PATCH nur für diese Driftstellen (keine Extras), bis PH1 widerspruchsfrei + DoD/Tests vollständig referenziert ist.
+
+Definition of Done (Tagesziel erreicht, wenn…)
+DOD-1) B290 PH1 Acceptance ↔ B310 PH1 Tests ↔ Enforcement-Blöcke (B110/B120/… nft) ↔ AAA/Settings/Janitor (B050/B057/B168) sind widerspruchsfrei referenziert.
+DOD-2) Alle PH1-MUSTs haben einen expliziten Test/Nachweis im Kanon (B310 oder klar referenziert).
+DOD-3) Keine doppelte/kontradiktorische Test-IDs oder widersprüchlichen Aussagen in den PH1-relevanten Blöcken.
+DOD-4) Fail-Closed ist für Legacy (PPP) und Modern (IKEv2) gleichwertig beschrieben (“No-Unpoliced-Window”), inkl. Pending/Active + Kill-on-expire.

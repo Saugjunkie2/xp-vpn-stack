@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B130_NFT_PEER_ISOLATION.txt
 ================================================================================
 BLOCK-ID: B130
 TITLE: nftables Peer Isolation (User-Netz)
-VERSION: v1.1
-DATUM: 2026-01-14
+VERSION: v1.3
+DATUM: 2026-01-20
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B060, B120
@@ -28,11 +28,18 @@ NOTES:
 - Influences: Security, Abuse containment
 
 4) INPUTS
-- user subnet 10.77.10.0/24
+- User Pools (USER = LEGACY + MODERN):
+  - LEGACY_VPN_NET_v4: 10.77.16.0/20
+  - MODERN_VPN_NET_v4: 10.77.32.0/20
+  - MODERN_VPN_NET_v6: fd77:0:0:32::/64 (falls v6 innerhalb VPN für User aktiv genutzt wird)
 
 5) OUTPUTS
-- forward drop: 10.77.10.0/24 -> 10.77.10.0/24
-- optional: admin->user policy separat (default: drop)
+- forward drop (Peer-Isolation, IPv4):
+  - (LEGACY_VPN_NET_v4 ∪ MODERN_VPN_NET_v4) -> (LEGACY_VPN_NET_v4 ∪ MODERN_VPN_NET_v4)
+  - damit sind LEGACY↔LEGACY, MODERN↔MODERN und LEGACY↔MODERN jeweils geblockt (User sehen sich nicht, segmentübergreifend).
+- forward drop (Peer-Isolation, IPv6 – MODERN):
+  - MODERN_VPN_NET_v6 -> MODERN_VPN_NET_v6 (User-v6 Peer Traffic blocken, falls genutzt)
+- optional: admin->user policy separat (default: drop; nur explizit via extra Block/Decision öffnen)
 
 6) MUST
 - Peer isolation enforced in kernel.
@@ -50,6 +57,8 @@ NOTES:
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.3 (2026-01-20): SoT=002/003: MODERN_VPN_NET_v6 auf fd77:0:0:32::/64 angehoben (statt ::3).
+- v1.2 (2026-01-20): K1-Konsistenz: Peer-Isolation Scope von „10.77.10.0/24“ auf USER=(LEGACY 10.77.16.0/20 + MODERN 10.77.32.0/20) erweitert; segmentübergreifende User↔User Kommunikation (inkl. LEGACY↔MODERN) explizit geblockt; optionales MODERN v6 Peer-Isolation ergänzt (falls v6 im User-VPN genutzt wird).
 - v1.1 (2026-01-14): Konsistenz: Header-DATUM aktualisiert; ABHÄNGIGKEITEN/Requires an Header angeglichen (B060 ergänzt). Keine Logikänderung.
 - v1.0: Initial
 ================================================================================

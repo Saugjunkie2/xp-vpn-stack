@@ -1,0 +1,384 @@
+xp-vpn-stack/blocks/B057_SETTINGS_PARAMETER_CANON_SQLFIRST_MAGIC_GUARD.txt
+================================================================================
+BLOCK-ID: B057
+TITLE: Settings/Parameter (SQL-first) — Kanonischer Contract (Magic-Guard)
+VERSION: v1.3
+DATUM: 2026-01-23
+STATUS: ACTIVE
+PRIORITY: MUST
+REQUIRES: B055, B050
+INFLUENCES: B030, B150, B155, B166, B270, B280, B285, B310
+OWNER-INTENT: SQL ist SoT für Policy-Parameter; keine Magic Numbers; deterministischer Effective-Value + Trace (/diag); Missing/Invalid dürfen nie „Allow by accident“ erzeugen.
+OWNER: Marco (Owner) + ChatGPT (Co-Architect)
+
+NOTES:
+- Inhalt ist 1:1 aus ENTWURF „=== G) Settings/Parameter (SQL-first Magic-Guard) ===“ übernommen („so wie es ist“).
+- Schema-SoT bleibt B055; dieser Block ist der kanonische Contract für Semantik/DoD/Flows.
+
+================================================================================
+
+=== G) Settings/Parameter (SQL-first Magic-Guard) ===
+
+13) Parameter & Settings (SQL-first) — Kanonischer Contract (Magic-Guard)
+
+Ziel (MUST):
+- SQL ist die Single Source of Truth (SoT) für Policy-Parameter.
+- Keine „Magic Numbers“ / implizite Defaults im Code, die Policy lockern könnten.
+- Code ist nur Enforcement-Engine; Policy kommt aus SQL (SoT).
+- Kein “Rate ich mal”: jede Stelle, die einen Wert braucht, referenziert dieselbe SoT.
+- Driftarm: Overrides nur dort möglich, wo der Katalog explizit erlaubt.
+- Missing/Invalid dürfen niemals „Allow by accident“ erzeugen (Fail-Closed/Fail-Safe ist maschinenlesbar definiert).
+- Deterministisch + debugbar (Trace): jede effektive Policy ist reproduzierbar und /diag-fähig.
+- Admin-Guardrails: im Panel keine “Freitext-Policy” für sicherheitsrelevante Felder, sondern keyed domains / Auswahl / validierte Ranges.
+
+
+13.1 Settings-Struktur (SoT) — Tabellenfamilie (MUST)
+Norm (MUST):
+- Es existieren drei Settings-Scopes als SoT-Quellen:
+  • settings_global      (Policy Default / Baseline)
+  • settings_customer    (Override pro Kunde/Account)
+  • settings_connection  (Override pro vpn_connection)
+- Zusätzlich existiert ein Katalog als maschinenlesbarer Contract:
+  • settings_catalog (Key-Definitionen inkl. Typ/Range/Fail-Verhalten/Override-Regeln)
+- Die Settings-Tabellen enthalten KEINE “Policy-Logik” — nur Values/Facts.
+  Policy-Logik ist der deterministische Effective-Value-Algorithmus (13.3).
+
+Unifiability / Uniqueness (MUST):
+- settings_global: UNIQUE(key)
+- settings_customer: UNIQUE(customer_id, key)   (Scope-ID = customer_id)
+- settings_connection: UNIQUE(vpn_connection_id, key) / UNIQUE(connection_id, key)  (Scope-ID = connection_id)
+
+Audit-Felder (MUST, minimal):
+- updated_at (timestamp; Zeitpunkt der letzten Änderung)
+- changed_by (admin_id / system_actor_id; Admin-Identität / actor)
+- comment (optional, empfohlen für Ops)
+- change_reason (optional, empfohlen)
+Constraints (MUST):
+Norm (MUST): Jede Settings-Tabelle enthält mindestens:
+- id (PK)
+- scope_id:
+  • settings_global: scope_id ist NULL oder fest (ein Row pro key)
+  • settings_customer: scope_id = customer_id
+  • settings_connection: scope_id = connection_id
+- key (FK → settings_catalog.key)
+- value_* (typed) ODER value_raw + type-coercion (aber dann coercion strikt nach catalog.type)
+- Range/Type-Validation MUSS gegen settings_catalog erfolgen (DB-level via constraints oder App-level hard fail, aber kanonisch deterministisch).
+
+
+13.2 settings_catalog (MUST, maschinenlesbar)
+Norm (MUST):
+- Jeder Key existiert im Katalog (z.B. settings_catalog), damit Entwickler nicht raten müssen.
+- settings_catalog definiert pro Key mindestens:
+  - key (string, immutable, unique global)
+  - type / value_type (enum):
+      { INT, FLOAT, BOOL, STRING, DURATION, CIDR, ENUM, JSON } (oder dein zulässiger Satz)
+  - scope_default (enum): { GLOBAL }  (Default-Wert stammt logisch aus global)
+  - allowed_override_scope (enum): { NONE, CUSTOMER, CONNECTION, BOTH }
+  - is_required (bool): MUST-Key ja/nein
+  - range_min / range_max (nullable, type-konsistent) ODER validator (kanonisch, explizit)
+  - fail_class (enum): { FAIL_CLOSED, FAIL_SAFE_HARDCAP }
+  - policy_direction (enum): { TIGHTEN_ONLY, RELAXES_ACCESS }
+    Norm (MUST): Fallbacks sind nur erlaubt, wenn fail_class=FAIL_SAFE_HARDCAP UND policy_direction=TIGHTEN_ONLY.
+  - failsafe_value_* / failsafe_hardcap_value (typed; nur wenn fail_class=FAIL_SAFE_HARDCAP)
+    Norm (MUST): failsafe_value ist ein “Notwert”, der nur verschärfen darf (tighten-only).
+  - missing_behavior (kanonischer Pfad; siehe 13.4)
+  - invalid_behavior (kanonischer Pfad; siehe 13.4)
+  - description (text, admin-facing)
+  - docs_anchor (wo im Kanon referenziert)
+  - created_at, updated_at (audit)
+Optional (OPTION):
+- domain_key (siehe 13.9 Governance), um “Auswahl statt Freitext” zu erzwingen.
+
+Norm (MUST):
+- allowed_override_scope ist Whitelist-basiert:
+  Ein Override ist nur zulässig, wenn der Key im Katalog explizit dafür freigegeben ist.
+
+
+13.3 Effective Value Algorithmus + Trace (P0/P1) (MUST)
+Ziel:
+- deterministisch, reproduzierbar, debugbar (/diag).
+
+Resolution Order (MUST):
+- effective_value wird deterministisch gebildet als:
+  1) settings_connection (höchste Priorität)
+  2) settings_customer
+  3) settings_global
+  4) falls kein Wert vorhanden/valide: Fallback gemäß fail_class (13.4)
+
+Arbeitsregel „P0/P1 fest“ (MUST, ab jetzt immer automatisch):
+- Jeder ENTWURF-Punkt, der Settings/Policy-Parameter nutzt oder erwähnt, gilt erst dann als „FEST“,
+  wenn er explizit P0/P1 erfüllt:
+    a) deterministische Resolution Order (CONNECTION > CUSTOMER > GLOBAL) ist genannt/implizit identisch
+    b) Effective-Value + Trace (P0) ist als Pflicht genannt: effective_value + effective_source
+       (+ warning_reason/validation_status wo relevant)
+- Fehlt a) oder b), dann ist der Punkt NICHT fest → bleibt ENTWURF/OQ (keine stillschweigende Annahme).
+- Konsequenz (MUST): Bei jeder neuen Key-/Policy-Ergänzung muss mindestens 1 Satz enthalten sein:
+  „/diag zeigt effective_value + effective_source (inkl. Fallback/Reason), Resolution Order ist kanonisch.“
+
+Algorithmus (MUST):
+- Werte werden pro Scope gelesen (entsprechend Resolution Order).
+- Der erste vorhandene Wert wird geparst/typgeprüft/range-geprüft.
+- Wenn der Wert invalid ist: invalid_behavior greift (siehe 13.4).
+- Wenn kein Wert vorhanden ist: missing_behavior greift (siehe 13.4).
+- Ergebnis liefert zusätzlich einen Trace:
+  effective_source ∈ { CONNECTION, CUSTOMER, GLOBAL, FAILSAFE_HARDCAP, FAIL_CLOSED }
+
+Effective-Trace (MUST):
+- /diag und Admin-Health müssen zu jedem key ausgeben:
+  • effective_value
+  • effective_source ∈ { CONNECTION, CUSTOMER, GLOBAL, FAILSAFE_HARDCAP, FAIL_CLOSED }
+  • validation_status ∈ { OK, MISSING, INVALID, FALLBACK_ACTIVE }
+  • ggf. warning_reason (Missing/Invalid/Fallback aktiv)
+  • (optional) winning_scope_id (connection_id/customer_id) falls zutreffend
+
+
+13.4 Missing vs Invalid + Fail-Verhalten (P4/E2) (MUST)
+Definitionen (MUST):
+- Missing: kein Eintrag vorhanden (für den betrachteten Scope) ODER kein globaler Default existiert.
+- Invalid: Eintrag vorhanden, aber type/range/parse/validator verletzt den Katalog (settings_catalog).
+
+Norm (MUST): Missing und Invalid sind verschieden zu behandeln:
+
+A) Missing Behavior (MUST):
+- Darf niemals still „relaxen“.
+- Reaktion ist pro Key im Katalog normiert:
+  a) FAIL_CLOSED:
+     → Hard Fail (Fail-Closed) für die betroffene Operation / Funktion / Subsystem (Gate bleibt zu).
+  b) FAIL_SAFE_HARDCAP (tighten-only):
+     → Nutzung von failsafe_value_* (extrem restriktiver Notwert) + Observability-Pflicht (13.5).
+	   • Operation fail-closed ODER (wenn fail_class=FAIL_SAFE_HARDCAP) failsafe_value + Flag “INVALID_OVERRIDDEN”
+
+B) Invalid Behavior (MUST):
+- Gilt als Policy Corruption (härter als Missing).
+- Reaktion ist pro Key im Katalog normiert:
+- Norm (MUST):
+  • Operation fail-closed ODER (wenn fail_class=FAIL_SAFE_HARDCAP) failsafe_value + Flag “INVALID_OVERRIDDEN”
+  a) FAIL_CLOSED:
+     → Hard-Fail (Subsystem stoppt deterministisch).
+  b) FAIL_SAFE_HARDCAP (tighten-only):
+     → Notwert + Pflichtwarnung
+- Zusätzlich (MUST):
+  • Invalid erzeugt immer ein Audit-Event (ratelimited) + Health Flag.
+  • Admin-Health Warning (Panel) + /diag Warning + ratelimited Log-Event
+  • Optional: “Fix Action” anbieten (13.9), aber nur policy-safe (tighten-only).
+
+
+13.5 Observability-Pflichten / Health (P5) (MUST)
+Norm (MUST):
+- Wenn irgendein key im Zustand { MISSING, INVALID, FALLBACK_ACTIVE } ist:
+  • Admin-Panel: Health Warnings (read-only) mit betroffenen Keys
+  • /diag: warnings inkl. betroffene keys + effective_source (+ reason)
+  • Logs: Event ist ratelimited (kein Log-DoS)
+- Es darf keinen “stillen Notbetrieb” geben.
+- Fallback darf nie unbemerkt bleiben.
+
+Norm (MUST):
+- Health-Infos sind read-only, aber Admin bekommt „Fix Actions“,
+  die nur tighten-only/safe-default zulassen (keine unsicheren Resets).
+
+
+13.6 Write-Auth Matrix (P6) (MUST)
+Norm (MUST):
+- Architektur („overridebar“) ≠ Berechtigung („wer darf schreiben“).
+
+Mindestmatrix (MUST, Stand heute):
+- Role=ADMIN: darf GLOBAL/CUSTOMER/CONNECTION schreiben (nur über Guardrails; siehe 13.9)
+- Role=USER/CUSTOMER: READ_ONLY auf Settings (keine Writes / kein Self-Service Write)
+- Role=CONNECTION: READ_ONLY (kein Self-Service Write)
+- Role=SYSTEM: darf schreiben, wenn es Teil eines definierten Flows ist (z.B. Provisioning setzt initiale Facts/Defaults)
+
+Norm (MUST):
+- Wenn später Rollen erweitert werden, muss eine explizite Matrix pro Role/Scope im Kanon stehen (kein implizites Verhalten).
+- Jeder Write erzeugt Audit (changed_by, timestamp, optional comment/change_reason).
+
+
+13.7 Write-Semantik (P2 Ergänzung) + Upsert/Txn + Race-Definition (MUST)
+Problem:
+- UNIQUE verhindert Duplikate, definiert aber nicht automatisch das Write-Verhalten und löst Write-Races nicht.
+
+Norm (MUST):
+- Der kanonische Write-Path für Settings ist Upsert (deterministisch),
+  nicht “erst SELECT dann INSERT” ohne Lock.
+
+Write-Path (MUST):
+- INSERT … ON CONFLICT (scope_id,key) DO UPDATE
+  oder äquivalente Tx/Lock-Strategie (DB-abhängig), aber normativ:
+  “no duplicate rows, deterministic last-write”.
+
+Norm (MUST):
+- Captured Audit-Facts: changed_by, updated_at, optional comment/change_reason.
+- Es gibt keinen Schreibpfad außerhalb dieses Contracts (keine “hidden config files” für Policy-Keys).
+- Wenn ein Write gegen allowed_override_scope verstößt: Hard Fail + Audit + keine stille Korrektur.
+
+
+13.8 Override-Policy (E1) + Allowed Scope (MUST)
+Norm (MUST):
+- Override ist Whitelist-basiert über settings_catalog.allowed_override_scope.
+
+Regeln:
+- allowed_override_scope=NONE: nur GLOBAL darf existieren; CUSTOMER/CONNECTION sind verboten.
+- allowed_override_scope=CUSTOMER: CUSTOMER darf existieren; CONNECTION ist verboten.
+- allowed_override_scope=CONNECTION: CONNECTION darf existieren; CUSTOMER ist verboten (außer BOTH).
+- allowed_override_scope=BOTH: CUSTOMER und CONNECTION sind erlaubt.
+
+DoD (MUST):
+- Override für nicht-overridebaren Key → Hard Fail (Reject) + Audit-Event.
+- Scope-Mismatch (z.B. Key erlaubt CUSTOMER, aber CONNECTION-Override versucht) → Hard Fail + Audit-Event.
+
+
+13.9 Admin-Guardrails + Governance: Auswahl statt Freitext / Keyed Domains (MUST)
+Ziel:
+- SQL-first ist Governance-first: Daten dürfen nicht “frei erfunden” werden, wo sie Policy tragen.
+- Für policyrelevante Felder gilt: kein Freitext, wenn Domain keyed sein kann.
+
+Governance-Domain-Typen:
+G1) plan_key (MUST für Produkt/Plan/Policy-Pakete)
+- plan_id ist intern (FK), UI/API arbeitet mit plan_key.
+- plan_key ist immutable.
+- Soft-Delete statt delete: active=false (Historie/FKs bleiben stabil).
+
+G2) ENUM (nur für kleine, stabile Domains)
+- Beispiele: conn_group, access_role, type/value_type, fail_class, allowed_override_scope
+- Ops-Constraint: ENUM-Änderungen erfordern Deploy/Migration.
+
+G3) Lookup Tables (für wachsende Domains)
+- Beispiele: plan_catalog, feature_flags, policy_packages, dynamic lists.
+
+Panel-Fix-Actions (MUST):
+- Health darf “Fix Actions” anbieten, aber nur policy-safe (tighten-only/safe-default):
+  • Insert missing required keys (mit safe defaults / oder fail-closed bleibt, wenn kein safe default existiert)
+  • Reset invalid value auf failsafe hardcap (tighten-only)
+- Jede Fix Action erzeugt Audit-Event (wer/was/wann/warum).
+
+
+13.10 Initiale Parameterliste (Start klein, aber kanonisch) (MUST)
+
+Key-Naming (KANONISCH, MUST):
+- Canonical Settings-Keys sind lower_snake_case (a-z0-9_).
+- FORBIDDEN: UPPERCASE Keys als “echte” Keys (DB/Panel/Skripte).
+- Wenn UPPERCASE in älteren Textstellen vorkommt, gilt es als Alias/Alt-Notation und muss auf Canonical gemappt werden:
+  • QUARANTINE_DAYS -> quarantine_days
+  • CONN_NEW_RATE_PER_SEC -> conn_new_rate_per_sec
+  • CONN_NEW_BURST -> conn_new_burst
+  • CONN_NEW_LOG_RATE_PER_SEC -> conn_new_log_rate_per_sec
+  • CONN_NEW_RATE_ADMIN_MULTIPLIER -> conn_new_rate_admin_multiplier
+
+Norm (MUST):
+- Startliste enthält mindestens die bereits im Entwurf genutzten Policy-Keys (canonical lower_snake_case),
+  inkl. Typ/Fail-Verhalten und Override-Regeln (allowed_override_scope) (SQL-first).
+
+  • quarantine_days (INT, >0)
+    — fail_class=FAIL_CLOSED, direction=TIGHTEN_ONLY (Compliance: IP-Reuse), allowed_override_scope=NONE
+
+  • conn_new_rate_per_sec (INT, >0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=1, allowed_override_scope=NONE
+
+  • conn_new_burst (INT, >=0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=0, allowed_override_scope=NONE
+
+  • conn_new_log_rate_per_sec (INT, >=0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=0, allowed_override_scope=NONE
+
+  • (OPTION) conn_new_rate_admin_multiplier (FLOAT, >=1.0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=1.0, allowed_override_scope=NONE
+
+  • pending_ttl_seconds (INT, >0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=30, allowed_override_scope=NONE
+    - Zweck: IKEv2 Pending Hygiene (NX-05 / B166); Pending Expiry behandelt Session als FAILED
+      (Kill-on-expire wenn SA existiert).
+
+  • active_session_lock_ttl_seconds (INT, >0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=20, allowed_override_scope=NONE
+    - Zweck: Mutex-Lock TTL (active_session_locks) für Single-Active-Session Guard (B055/B056/B171);
+      verhindert Lock-Leichen. Konsumenten dürfen keine lokalen Defaults definieren (nur gemäß B057).
+
+  • cleanup_ratelimit_window_seconds (INT, >0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=10, allowed_override_scope=NONE
+    - Contract: Hardcap <= 30s (Systemschutz; Konsument: B169)
+
+  • cleanup_result_ttl_seconds (INT, >0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=30, allowed_override_scope=NONE
+    - Contract: Hardcap <= 120s (Systemschutz; Konsument: B169)
+
+  • cleanup_timeout_seconds (INT, >0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=1, allowed_override_scope=NONE
+    - Contract: Hardcap <= 2s (Login-Path Schutz; Konsument: B169)
+
+  • radius_acct_interim_seconds (INT, >0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=300, allowed_override_scope=NONE
+    - Contract: PHYSICS_CAP (MIN/MAX werden implementierungsseitig enforced; keine losen Zahlen in Konsumenten) (Konsument: B168)
+
+  • janitor_interval_seconds (INT, >0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=300, allowed_override_scope=NONE
+    - Contract: PHYSICS_CAP (MIN/MAX werden implementierungsseitig enforced; keine losen Zahlen in Konsumenten) (Konsument: B168)
+
+  • stale_threshold_seconds (INT, >0)
+    — fail_class=FAIL_SAFE_HARDCAP, direction=TIGHTEN_ONLY, failsafe=900, allowed_override_scope=NONE
+    - Contract: PHYSICS_CAP / Relation-Constraints werden im Kanon beschrieben; keine lokalen Defaults (Konsument: B168)
+
+• tail_reserve_slots (B061: allocatable slots / exhaustion)
+  - type: INT
+  - scope_default: {GLOBAL}
+  - allowed_override_scope: NONE (global only)
+  - fail_class: FAIL_SAFE_HARDCAP (tighten-only)
+  - failsafe_value_int: 0
+  - notes: “tail reserve” schützt Pool-Fairness & Admin-Breakglass
+
+• online_window_seconds (B061 panel heuristic: ONLINE/OFFLINE)
+  - type: INT
+  - scope_default: {GLOBAL}
+  - allowed_override_scope: NONE
+  - fail_class: FAIL_SAFE_HARDCAP (tighten-only)
+  - failsafe_value_int: 300
+  - notes: nur Panel/Stats, kein Enforcement
+
+
+Hinweis (MUST):
+- Zahlenwerte können später festgelegt werden; aber Typ/Range/Fail-Verhalten/Override-Regeln sind ab jetzt Spezifikation.
+- Jede Enforcement-Stelle (Allocator/nftables/AAA/Panel) referenziert ausschließlich über SoT (SQL-first), niemals als Magic Numbers.
+
+13.11 DoD / Validierung für Settings-Contract (MUST)
+DoD-E1 (Override-Whitelist):
+- Override für Key mit allowed_override_scope=NONE wird abgelehnt (Hard Fail + Audit).
+- Scope-Mismatch (Key erlaubt CUSTOMER, Write versucht CONNECTION) wird abgelehnt.
+
+DoD-P0/P1 (Determinismus + Trace):
+- /diag zeigt effective_value + effective_source für Key
+  (GLOBAL/CUSTOMER/CONNECTION/FAILSAFE_HARDCAP/FAIL_CLOSED).
+
+DoD-E2/P4 (Missing vs Invalid):
+- Missing MUST-Key → definierte Reaktion tritt deterministisch ein (fail-closed oder hardcap).
+- Invalid Type/Range/Validator → deterministischer Hard Fail (oder hardcap falls so normiert) + Health Flag + Audit (ratelimited).
+
+DoD-P5 (Observability):
+- Fallback aktiv → Admin sieht Warning + /diag listet betroffene Keys.
+- Logs bleiben ratelimited (kein Disk-Füller).
+
+
+15) FEST Kanonische Parameter & Settings (SQL-first): geschlossen durch Kapitel 13
+Anker: Kapitel 13 „Parameter & Settings (SQL-first)“
+
+Erledigt durch:
+- settings_catalog + settings_* Tabellenfamilie (SoT, maschinenlesbar)
+- Resolution Order + Effective Value Algorithmus + Trace (P0/P1)
+- Uniqueness + Upsert/Txn-Write-Semantik (P2)
+- Katalog-Metadaten (P3) + Missing vs Invalid (P4)
+- Observability (/diag + Panel Health) (P5)
+- Write-Auth Matrix + Admin-Guardrails (P6 + Governance)
+- Initiale Parameterliste (QUARANTINE_DAYS, CONN_NEW_*) inkl. Fail-Verhalten
+
+Validierung (DoD):
+- /diag zeigt effective_value + source + warnings deterministisch.
+- Missing/Invalid/Fallback erzeugen Health-Warnungen + ratelimited Logs.
+- Overrides nur, wenn allowed_override_scope im Katalog erlaubt (Hard Fail sonst).
+
+================================================================================
+CHANGELOG
+================================================================================
+- v1.3 (2026-01-23): Ergänzt failsafe_value_* für tail_reserve_slots und online_window_seconds (Norm 13.2 erfüllt; Referenzen B061/B310 konsistent).
+- v1.2 (2026-01-23): PH1/O-02 Closure: active_session_lock_ttl_seconds ergänzt; Startliste erweitert (cleanup_* / acct_interim / janitor_interval / stale_threshold / tail_reserve / online_window) und allowed_override_scope kanonisch gemacht; Text-Drift („...“) in Startliste bereinigt.
+- v1.1 (2026-01-23): Canon-Fix: Settings-Key-Naming als lower_snake_case kanonisiert (UPPERCASE forbidden/alias); pending_ttl_seconds in Startliste ergänzt (NX-05 Dependency).
+- v1.0 (2026-01-21): Neu: Settings/Parameter Kanon (SQL-first Magic-Guard) als eigener Block (1:1 aus ENTWURF Kapitel G/13.* übernommen).
+================================================================================
+END BLOCK B057
+================================================================================

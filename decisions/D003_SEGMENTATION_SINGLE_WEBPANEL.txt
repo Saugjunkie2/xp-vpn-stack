@@ -1,0 +1,156 @@
+xp-vpn-stack/decisions/D003_SEGMENTATION_SINGLE_WEBPANEL.txt
+================================================================================
+DECISION-ID: D003
+TITLE: Segmentierung (LEGACY/MODERN/ADMIN) + Single Webpanel + Admin-only Tools Isolation
+VERSION: v2.4
+DATUM: 2026-01-21
+STATUS: ACCEPTED
+OWNER: Marco (Owner) + ChatGPT (Co-Architect)
+================================================================================
+
+CONTEXT
+- Ausgangslage / Drift-Guard:
+  - In der Dokumentation darf aus “admin-only Tools/UIs” niemals ein separates “Admin-Panel” als Produkt/Surface entstehen.
+- Problem:
+  - Dieses “Admin Panel”-Framing ist driftig:
+    - Es gibt genau EIN Webpanel (Verify/Claim/Status/Diag).
+    - “Admin” ist eine Rolle/Capability innerhalb dieses Panels, kein separates Panel-Produkt.
+    - Zusätzlich existieren Admin-only Tools/UIs (AdGuard UI, DB-Tools/pma, SSH) — diese sind NICHT “Admin Panel”.
+- Ziel:
+  - Saubere Segmentierung für Policy/Isolation/Abuse-Resistenz (Legacy XP/Vista + Modern),
+    ohne UI-Doppelungen, und mit klaren Enforcement-Punkten (Defense-in-Depth).
+
+DECISION (NORMATIV)
+
+D003-DEC-01 (Segmente / conn_group):
+- Wir führen drei conn_group-Segmente als kanonisches Modell:
+  - LEGACY  (Windows XP/Vista)
+  - MODERN  (moderne Clients)
+  - ADMIN   (Admin-Verbindungen / Admin-Geräte)
+- Diese Segmente sind Policy-Segmente (IP-Pools, nftables Scopes, Limits, Flows) und keine “Panels”.
+- Ableitungs-/SoT-/Gate-Normen (deterministische derived_policy, Verify-vs-AAA Trennung): siehe B058.
+
+D003-DEC-02 (Single Webpanel):
+- Es gibt GENAU EIN Webpanel als Surface:
+  - Webpanel läuft intern auf SERVICE_WEB 10.77.0.3.
+  - Panel-User existiert mit Rollen (USER/ADMIN) innerhalb dieses EINEN Panels.
+- Es gibt KEIN separates “Admin-Panel”.
+
+D003-DEC-03 (Admin-only Tools/UIs sind kein Panel):
+- Admin-Oberflächen/Tools sind getrennte Tools/UIs, keine zweite Panel-Instanz:
+  - AdGuard UI (admin-only)
+  - DB-Tools/pma (admin-only)
+  - SSH (admin-only)
+- Diese Tools/UIs werden über ADMIN-Scope abgesichert (netz-/ip-basiert) und wo zutreffend zusätzlich über Role=ADMIN.
+- NORM (MUST): Netzwerk-Scope (ADMIN_VPN_NET / nftables Scope) ist das primäre Gate für Admin-only Tools/UIs. Role=ADMIN ist kein Ersatz für ADMIN-Scope und darf niemals Netzwerkzugang “freischalten”.
+
+D003-DEC-04 (Service Anchors / Netze):
+- Service anchors in Zone 0 (v4/v6):
+  - SERVICE_DNS:      10.77.0.1 / fd77:0:0:0::1
+  - SERVICE_RESOLVER: 10.77.0.2 / fd77:0:0:0::2
+  - SERVICE_WEB:      10.77.0.3 / fd77:0:0:0::3
+  - SERVICE_NTP:      10.77.0.4 / fd77:0:0:0::4
+  - SERVICE_SSH:      10.77.0.5 / fd77:0:0:0::5  (SSH admin-only scoped)
+- NORM (MUST): Service-Targets sind nicht PPP-Interface-gebunden, sondern als always-up Anchors im SERVICE_NET modelliert (stabile Bind-/Routing-Ziele unabhängig von Session Up/Down).
+- SERVICE_NET_v4: 10.77.0.0/28 (SoT: B060_NETPLAN_IPS_SEGMENTS)
+
+- VPN-Netze (SoT: B060_NETPLAN_IPS_SEGMENTS):
+- SERVICE_NET_v4: 10.77.0.0/28
+- SERVICE_NET_v6: fd77:0:0:0::/64
+- ADMIN_VPN_NET_v4: 10.77.2.0/24
+- ADMIN_VPN_NET_v6: fd77:0:0:2::/64
+- MODERN_VPN_NET_v4: 10.77.32.0/20
+- MODERN_VPN_NET_v6: fd77:0:0:32::/64
+- LEGACY_VPN_NET_v4: 10.77.16.0/20 (v4-only; kein LEGACY_VPN_NET_v6)
+
+IPv6:
+- LEGACY: ist IPv4-only (kein v6 Stack im Legacy-Pfad).
+ADMIN und MODERN sind Dualstack (v4+v6) auf Basis der B060-SoT Prefixe:, gleiche Regeln/Enforcement wie v4 (DNS-Zwang, Peer-Isolation, Abuse-Blocks, etc.), keine Sonderbehandlung
+  - ADMIN_VPN_NET_v6:  fd77:0:0:2::/64
+  - MODERN_VPN_NET_v6: fd77:0:0:32::/64
+- SERVICE_NET ist dualstack:
+  - SERVICE_NET_v6: fd77:0:0:0::/64 (SERVICE_* Targets parallel zu v4).
+- Regeln gelten identisch für v4 und v6 (DNS-Zwang/Isolation/Abuse-Blocks); keine Sonderbehandlung für IPv6.
+D003-DEC-05 (Enforcement-Punkte – MUST, Defense-in-Depth):
+- Segmentierung gilt nur als erfüllt, wenn sie an mehreren Stellen erzwungen wird:
+
+  1) AAA/RADIUS (SQL-first):
+     - conn_group ist DB-geführt und bestimmt Pool/Policy.
+     - fixed_ip / fixed_ipv6 / Framed-IP ist DB-geführt und PFLICHT pro Subaccount (nicht optional; nicht frei änderbar).
+     - Panel-Rolle (USER/ADMIN) ist DB-geführt und steuert Panel-Authorisation.
+     - NORM (MUST): conn_group (Netz/Policy-Scope) und Panel-Rolle (Authorisation im Webpanel) sind orthogonal. Kein Attribut darf das andere implizieren (kein “ADMIN-Netz => Adminrolle”, kein “Adminrolle => ADMIN-Netz”).
+     - NORM (MUST): USER-Gates (Quota/Expiry/UNCLAIMED_OVERDUE/WalledGardenPolicy) werden nur für conn_group != ADMIN evaluiert; ADMIN ignoriert diese Gates.
+       manual_restricted gilt als Not-Aus für alle conn_groups inkl. ADMIN (Kernel-Enforcement via restricted_*).
+
+  2) IP-Pool / Allocator:
+     - LEGACY/MODERN/ADMIN haben getrennte Pools (keine Vermischung).
+     - Exhaustion/Fail-Closed Verhalten ist definiert (deterministisch).
+
+  3) nftables / Routing:
+     - Peer-Isolation und Segment-Isolation (client↔client nach Policy geblockt).
+     - Admin-only Tools/UIs nur im ADMIN-Scope erreichbar.
+     - SERVICE_RESOLVER ist server-only (Clients dürfen nicht direkt 10.77.0.2:53 erreichen).
+     - DNS-Zwang/Redirect (wenn aktiv) verweist auf SERVICE_DNS 10.77.0.1.
+
+  4) Webpanel Gates:
+     - Verify/Claim sind Panel-Flows (kein impliziter “VPN-State flip”).
+     - Admin-Aktionen (Promotion/Demotion/Provisioning) sind Role=ADMIN-gebunden.
+
+RATIONALE
+- Verhindert semantischen Drift (“Admin Panel”) und hält das Produkt-/Surface-Modell sauber.
+- conn_group trennt Policies/Netze ohne UI-Duplikation.
+- Admin-only Tools bleiben streng begrenzt, ohne eine zweite Panel-Angriffsfläche zu definieren.
+- XP/Vista Constraints bleiben kompatibel (keine modernen Browser-/TLS-Annahmen für VPN-Basisfunktion).
+
+SECURITY / ABUSE (MUST)
+- Kein WAN-Webpanel (nur intern über VPN).
+- Admin-only Tools/UIs ausschließlich über ADMIN-Scope erreichbar; zusätzliche AuthZ wo passend.
+- Keine Secrets in Logs; PII minimieren.
+- Promotion/Demotion darf nicht über conn_group “erschlichen” werden (Role=ADMIN Gate im Panel).
+
+OPS / OPERABILITY (MUST)
+- Deterministische Outcome/Reason-Codes bei DENY/RESTRICT.
+- Admin kann Policies/Accounts SQL-first steuern (keine Hidden Config).
+- Healthchecks prüfen SERVICE_WEB 10.77.0.3 (/diag) sowie DNS/NTP nach jeweiligen Blocks.
+
+DEFINITION OF DONE / VALIDIERUNG (MUST)
+- DoD-01 Terminologie:
+  - Im Repo existiert kein aktiver Begriff “Admin Panel” als separates Panel-Produkt.
+  - “Admin-only Tools/UIs” ist der kanonische Begriff.
+
+- DoD-02 Segment Enforcement:
+  - LEGACY erhält IP aus LEGACY_VPN_NET_v4 und erreicht keine Admin-only Tools.
+  - ADMIN erhält IP aus ADMIN_VPN_NET_v4 und erreicht Admin-only Tools.
+  - SERVICE_RESOLVER (10.77.0.2) ist für Clients nicht direkt erreichbar.
+
+- DoD-03 Service Targets:
+  - /diag ist über SERVICE_WEB 10.77.0.3 erreichbar.
+  - DNS läuft über SERVICE_DNS 10.77.0.1; Resolver bleibt server-only.
+
+- DoD-04 Failure / Exhaustion:
+  - Pool exhausted → Fail-Closed, deterministisch (keine “halben” Sessions).
+  - Logging/Rotation verhindert Disk-Full Kaskaden.
+
+- DoD-05 Negative Tests (Gate-Umgehung / Privilege Escalation):
+  - Ein Client im ADMIN_VPN_NET_v4 mit Panel-Rolle USER darf keine Admin-Aktionen im Panel ausführen (Role-Gate hält).
+  - Ein Panel-User mit Rolle ADMIN aus LEGACY/MODERN darf keine Admin-only Tools/UIs erreichen, wenn er nicht im ADMIN-Scope ist (Scope-Gate hält).
+  - SERVICE_RESOLVER bleibt server-only auch bei aktivem DNS-Zwang/Redirect (kein direkter Client-Zugriff auf 10.77.0.2:53).
+
+LINKED BLOCKS / RECORDS
+- SoT Netze/Service: B060_NETPLAN_IPS_SEGMENTS
+- conn_group Ableitungen/SoT/Gates: B058_CONN_GROUP_POLICYKEY_DETERMINISTIC_DERIVATIONS
+- Healthchecks: B180_SYSTEMD_RESTART_HEALTHCHECKS
+- Security/Stealth: B300_SECURITY_STEALTH_GUIDELINES
+- Reason-Codes / Outcomes: D011_POLICY_OUTCOME_DENY_RESTRICT_REASON_CODES
+- Web-Frontend: D001_OPENRESTY_OVER_APACHE
+- NTP: D006_NTP_MANDATORY_XP
+
+================================================================================
+CHANGELOG
+================================================================================
+- v2.4 (2026-01-21): IPv6 Abschnitt präzisiert: conn_group Parity (LEGACY v4-only, ADMIN/MODERN dualstack) + B060-SoT Prefixe + SERVICE_NET_v6 explizit genannt; keine Semantikänderung, nur Kanon-Klarheit.
+- v2.3 (2026-01-21): Drift-Fix: SERVICE_NET_v4 in Netzübersicht korrigiert auf /28 (kein /24 Duplicate); MODERN_VPN_NET_v6 korrigiert auf fd77:0:0:32::/64 (SoT: B060).
+- v2.2 (2026-01-21): SERVICE_NET + Zone-0-Services auf Dualstack aktualisiert (inkl. SERVICE_SSH); Dualstack-Regel (ADMIN/MODERN) vs LEGACY (v4-only) klargestellt; fixed_ip/fixed_ipv6 als Pflicht markiert.
+- v2.1 (2026-01-21): Referenz auf B058 ergänzt (conn_group deterministische Ableitungen + Verify-vs-AAA Trennung).
+- v2.0 (2026-01-20): D003 neu formuliert für aktuelles Modell: conn_group LEGACY/MODERN/ADMIN, Single Webpanel (SERVICE_WEB 10.77.0.3), Admin-only Tools/UIs statt “Admin Panel”, Enforcement-Punkte + DoD.
+================================================================================

@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B055_DB_SCHEMA_CORE.txt
 ================================================================================
 BLOCK-ID: B055
 TITLE: DB Schema Core (customers, vpn_connections, active_session_locks)
-VERSION: v1.10
-DATUM: 2026-01-14
+VERSION: v1.16
+DATUM: 2026-01-23
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B050
@@ -15,6 +15,10 @@ NOTES:
 - Core-Schema bleibt bewusst klein und stabil; neue Features sollen neue Tabellen bekommen, nicht „Core aufblasen“.
 - Keine History/Forensics in Core-Tabellen: Verlaufsdaten gehen in Logs/Accounting/Separate Historientabellen.
 - active_session_locks ist ein Atomar-Lock: muss crash-sicher auflösbar sein (Janitor) und gegen Parallel-Connects schützen.
+REF-ONLY HYGIENE (K2):
+- B055 ist Schema-SoT: Feldnamen/Constraints/Indizes sind hier bindend.
+- Wenn andere Blöcke (z.B. B030/B050/02_GLOSSAR) diese Felder/Defaults erwähnen, ist das ref-only und MUSS zu B055 deckungsgleich bleiben (keine stillen Abweichungen).
+- Terminologie-SoT: 02_GLOSSAR.txt (Benennung); AAA-Kontext/Drift-Guard: B050.
 ================================================================================
 
 ================================================================================
@@ -49,8 +53,19 @@ Indexes:
 - subaccount_login (PPP/RADIUS Username; pro Gerät; UNIQUE; serverseitig generiert; niemals user-supplied; nicht-enumerierbar)
   - Format (kanonisch): "vpn_" + 16 Zeichen Base32 (Alphabet: a-z2-7)
   - Ziel: keine ableitbaren/fortlaufenden IDs (Enumeration verhindern)
+- conn_group (ENUM: LEGACY | MODERN | ADMIN; NOT NULL)
+  <-- Kanonische Connection-Klassifikation (Scope/Policy/Diag); SQL-first SoT; niemals aus IP-Ranges “ableiten/erraten”.
 - subaccount_nt_hash (MSCHAPv2 Secret als NT-Hash; SoT; kein Klartext-SoT)
-- fixed_ip (IPv4; PPP-IP; RADIUS Framed-IP-Address; fix pro Connection)
+- v6_addr_policy (ENUM: NONE | FIXED_SQL; NOT NULL)
+  <-- IPv6 Adress-Policy (SQL-first). LEGACY = NONE (v4_only). ADMIN/MODERN = FIXED_SQL (Dualstack), sofern Pool-V6 verfügbar (B060/B061).
+- ip_slot (INTEGER; SoT; NULL bis Provisionierung)
+  <-- Deterministische Slot-ID als Single Source of Truth für IP-Zuordnung: aus ip_slot werden fixed_ip (IPv4) und fixed_ipv6 (IPv6) materialisiert (B061).
+- fixed_ipv6 (IPv6; materialisiert aus ip_slot, nur wenn v6_addr_policy=FIXED_SQL; sonst NULL)
+- fixed_ip (IPv4; materialisiert aus ip_slot; PPP-IP; RADIUS Framed-IP-Address; stabil pro Connection; keine Random-Leases) (B061)
+- disabled_at (timestamp, NULL bis DISABLED)
+  <-- Setzen wenn status=DISABLED (z.B. Demotion/Manual/claim_deadline). Einmaliger Marker (kein History-Log; nur Zustand/Operability).
+- revoked_at (timestamp, NULL bis „revoked“)
+  <-- Entzug-/Quarantäne-Marker (z.B. Demotion/Hardcut-Pattern). Wird genutzt, um „aktive“ Zuordnungen von „revoked“ zu trennen (Bezug: B280/B061).
 - status (ENUM: PREPROVISIONED | CLAIMED | DISABLED)
 - claim_token_hash (UNIQUE) <-- Hash des Claim-Tokens (claim_token Klartext existiert nur auf Gerät/Sticker/Label; NIE für VPN-Login)
 - claimed_at (timestamp, NULL bis Claim)
@@ -68,11 +83,14 @@ Indices:
 - UNIQUE(claim_token_hash)
 - INDEX status
 - INDEX customer_id
+- INDEX conn_group
 - INDEX fixed_ip
 - INDEX unclaimed_grace_until
 - INDEX claim_deadline
 - INDEX restricted_effective
 - INDEX restricted_reason
+- INDEX disabled_at
+- INDEX revoked_at
 
 ### 2.3 active_session_locks
 Atomic guard (Mutex) against SimUse race (radacct is Truth for “session active”, this table is NOT a session-state)
@@ -80,7 +98,7 @@ Atomic guard (Mutex) against SimUse race (radacct is Truth for “session active
 - vpn_connection_id (FK vpn_connections.id)
 - session_key (VARCHAR)  <-- rein diagnostisch (z.B. derived from NAS-IP-Address + Calling-Station-Id + username)
 - acquired_at (DATETIME)
-- expires_at (DATETIME)  <-- MUST: NOW()+20s (Guard TTL; D012/B056)
+- expires_at (DATETIME)  <-- MUST: NOW()+<Lock-TTL> wobei <Lock-TTL> = active_session_lock_ttl_seconds (gemäß B057; inkl. failsafe/validierung dort)
 - state (enum: held, released)  <-- OPTIONAL, DIAGNOSTIC ONLY (kein Lifecycle / keine Logikquelle)
 - release_reason (nullable)     <-- OPTIONAL, DIAGNOSTIC ONLY
 
@@ -89,8 +107,8 @@ Constraints:
 - INDEX(expires_at)          <-- janitor scans
 
 Kanonisches Verhalten (A+B):
-- Acquire: authorize end (kurz vor OK/ACCEPT) -> INSERT lock (expires_at=NOW()+20s)
-- Release: accounting Acct-Start -> DELETE lock (Guard muss weg, sobald radacct Truth ist)
+- Acquire: authorize end -> INSERT lock (expires_at = NOW() + Lock-TTL; Lock-TTL = active_session_lock_ttl_seconds gemäß B057)
+- Release: on Accounting-Start (radacct start) -> DELETE lock row
 - Expired locks dürfen im Auth-Pfad ignoriert/gelöscht werden (idempotent); verhindern keinen dauerhaften Lockout.
 
 ## 3) Notes / Constraints
@@ -105,57 +123,81 @@ Kanonisches Verhalten (A+B):
 Ziel: SQL-first Policy/Parameter sind referenzierbar und auditierbar (kein Drift von “losen Zahlen” in Text/Configs).
 Diese Tabellen gehören NICHT in die Core-Tabellen customers/vpn_connections/active_session_locks, sondern sind bewusst separate Extensions.
 
-A) settings_global (MUST)
-- setting_key (PK, VARCHAR)  -- z.B. "log_detailed_retention_days"
-- value (VARCHAR)            -- typed via value_type
-- value_type (ENUM: int,bool,string,seconds,ms,bytes)
-- updated_at (TIMESTAMP)
-- updated_by (VARCHAR)       -- admin identifier (UI/audit)
-- comment (TEXT, optional)
-- Optional: min_value/max_value (für UI-Guard; Hard Caps bleiben trotzdem lokal im Code)
+A) settings_catalog (MUST, maschinenlesbarer Contract)
+Ziel: Jeder Settings-Key ist definiert (Typ/Range/Fail-Verhalten/Override-Regeln), damit Code/Panel nie „raten“.
+- key (PK, immutable, unique global)
+- type / value_type (ENUM):
+  { INT, FLOAT, BOOL, STRING, DURATION, CIDR, ENUM, JSON } (oder dein zulässiger Satz)
+- scope_default (ENUM): { GLOBAL }
+- allowed_override_scope (ENUM): { NONE, CUSTOMER, CONNECTION, BOTH }
+- is_required (BOOL)
+- range_min / range_max (nullable, type-konsistent) ODER validator (kanonisch, explizit)
+- fail_class (ENUM): { FAIL_CLOSED, FAIL_SAFE_HARDCAP }
+- policy_direction (ENUM): { TIGHTEN_ONLY, RELAXES_ACCESS }
+  Norm: Fallbacks nur erlaubt, wenn fail_class=FAIL_SAFE_HARDCAP UND policy_direction=TIGHTEN_ONLY.
+- failsafe_value_* / failsafe_hardcap_value (typed; nur wenn fail_class=FAIL_SAFE_HARDCAP)
+- missing_behavior (kanonisch; siehe B057)
+- invalid_behavior (kanonisch; siehe B057)
+- description (admin-facing text)
+- docs_anchor (Referenz in Kanon: B057)
+- created_at, updated_at (audit)
+Optional (OPTION):
+- domain_key (Governance: Auswahl statt Freitext; siehe B057 13.9)
 
-B) settings_customer (OPTIONAL, wenn per Kunde/Plan variieren soll)
+B) settings_global (MUST)
+Norm: Baseline/Default-Values (Scope=GLOBAL). Keine Policy-Logik hier, nur Facts/Values.
+- id (PK)
+- key (FK -> settings_catalog.key)
+- value_* (typed) ODER value_raw + strict coercion nach settings_catalog.type
+- updated_at (timestamp)
+- changed_by (admin_id / system_actor_id)
+- comment (optional)
+- change_reason (optional)
+
+Constraints:
+- UNIQUE(key)
+
+C) settings_customer (OPTIONAL, wenn per Kunde/Account variieren soll)
+- id (PK)
 - customer_id (FK -> customers.id)
-- setting_key, value, value_type, updated_at, updated_by, comment, min_value, max_value
-- PK: (customer_id, setting_key)
+- key (FK -> settings_catalog.key)
+- value_* (typed) ODER value_raw + strict coercion nach settings_catalog.type
+- updated_at, changed_by, comment, change_reason
 
-C) settings_connection (OPTIONAL, wenn per vpn_connection_id variieren soll)
+Constraints:
+- UNIQUE(customer_id, key)
+
+D) settings_connection (OPTIONAL, wenn per VPN-Connection variieren soll)
+- id (PK)
 - vpn_connection_id (FK -> vpn_connections.id)
-- setting_key, value, value_type, updated_at, updated_by, comment, min_value, max_value
-- PK: (vpn_connection_id, setting_key)
+- key (FK -> settings_catalog.key)
+- value_* (typed) ODER value_raw + strict coercion nach settings_catalog.type
+- updated_at, changed_by, comment, change_reason
 
-D) customer_email_verify (MUST)
-Ziel: Verify-Code (email_verify_code) ist kurzlebig + single-use + nicht im Klartext persistiert.
-Diese Tabelle ist bewusst NON-CORE (transient Security Artefakte), aber SQL-first SoT für Verify/RateLimit/Lockout-Status.
+Constraints:
+- UNIQUE(vpn_connection_id, key)
 
-- customer_id (PK, FK -> customers.id)
-- verify_code_hash (VARBINARY/CHAR; Hash des Codes; Klartext wird nie gespeichert)
-- verify_code_expires_at (TIMESTAMP)   -- TTL, nach Ablauf ungültig
-- verify_code_sent_at (TIMESTAMP)      -- Diagnose/Audit: wann zuletzt gesendet
-- resend_count (INT)                   -- Zähler im aktuellen Window (SQL-first RateLimit)
-- resend_window_started_at (TIMESTAMP) -- Beginn des aktuellen Resend-Windows
-- attempt_count (INT)                  -- Zähler falscher Eingaben im aktuellen Window
-- attempt_window_started_at (TIMESTAMP)-- Beginn des aktuellen Attempt-Windows
-- locked_until (TIMESTAMP, NULL)       -- Lockout bis Zeit X (SQL-first Policy)
-- updated_at (TIMESTAMP)
-
-Indexes:
-- (optional) INDEX(verify_code_expires_at) -- falls Janitor/cleanup per DB-Scan vorgesehen
-
-Regeln (KANONISCH):
-- SQL liefert “Target Values” (Policy); lokale Hard Caps/Safety Ceilings werden IMMER im Code erzwungen (Physik > Policy).
-- Wenn SQL down/timeout: Notfall-Fallbacks greifen (in den jeweiligen Blocks definiert), System bleibt deterministisch.
+Kanonische Validierung (MUST):
+- Type/Range/Validator müssen deterministisch gegen settings_catalog erfolgen.
+- allowed_override_scope ist Whitelist-basiert (Write wird abgelehnt, wenn der Key im Katalog nicht freigegeben ist).
+- Missing vs Invalid + Fail-Verhalten (FAIL_CLOSED vs FAIL_SAFE_HARDCAP) ist Kanon (siehe B057).
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.16 (2026-01-23): Entfernt Lock-TTL-Literale (NOW()+20s / TTL=20s) aus Schema-Text; Lock-Expiry wird jetzt ausschließlich über active_session_lock_ttl_seconds gemäß B057 beschrieben.
+- v1.15 (2026-01-21): Thema D Schema-Contract ergänzt: vpn_connections.disabled_at + vpn_connections.revoked_at (Demotion/Entzug/Quarantäne-Marker; Bezug: B062; Terminologie-Mapping in Glossar).
+- v1.14 (2026-01-21): Thema I DB-Contract ergänzt: ip_slot als SoT + v6_addr_policy + fixed_ipv6; fixed_ip als materialisierte Ableitung präzisiert (Bezug: B061).
+- v1.13 (2026-01-21): Settings-Registry an B057 (SQL-first Magic-Guard) angepasst: settings_catalog als Contract ergänzt + settings_* auf FK->catalog + typed/validated Values + Audit/Override-Whitelist normiert (keine Magic value_type/min/max als Policy).
+- v1.12 (2026-01-20): Ref-only-Hygiene ergänzt (B055 als bindende Schema-SoT klar markiert + SoT-Referenzen zu Glossar/B050).
+- v1.11 (2026-01-20): K2: conn_group (LEGACY/MODERN/ADMIN) als SQL-first SoT in vpn_connections ergänzt (NOT NULL) + INDEX conn_group; Regel: niemals aus IP-Ranges ableiten/erraten.
 - v1.10 (2026-01-14): Schema-Konsistenz: vpn_connections um restricted_reason (QUOTA/EXPIRY/MANUAL/UNCLAIMED_OVERDUE) + restricted_effective ergänzt inkl. Indizes; Align zu B050/B166 (Restricted ist Kernel/nftables-Effective, server-managed).
 - v1.9 (2026-01-14): customers erweitert für Onboarding: email_verified_at + Status ENUM PENDING/ACTIVE/SUSPENDED/DELETED; NON-CORE Extension customer_email_verify ergänzt (verify_code_hash + TTL + RateLimit/Lockout State für Verify-Code/email_verify_code).
 - v1.8 (2026-01-14): 3.2 SQL-first SoT: Settings Registry als NON-CORE Extension ergänzt (settings_global + optional customer/connection Scopes). Hard Caps bleiben lokal (Physik > Policy). Keine Änderung an Core-Tabellen beschrieben.
 - v1.7 (2026-01-14): subaccount_login Constraints kanonisiert (server-generated, Format vpn_+16 Base32 a-z2-7, non-enumerable) und claim_token_hash Kommentar redaktionell bereinigt.
 - v1.6 (2026-01-14): Redaktion: OWNER-INTENT präzisiert – SimUse ist kein State-Machine-Thema, sondern Modell A+B (radacct Truth + Guard/Mutex). Inhalt/Schema unverändert.
-- v1.5 (2026-01-14): active_session_locks kanonisiert als Guard/Mutex (kein Lifecycle/kein Truth): TTL=20s, Release auf Acct-Start (DELETE), state/release_reason nur diagnostisch.
-- v1.4 (2026-01-14): customers.display_name (UI-only, VARCHAR(40)) als kanonisches Schema-Feld ergänzt (Panel-Greeting; Fallback=email; escaped output).
+- v1.5 (2026-01-14): Adds active_session_locks mutex table (no..._session_lock_ttl_seconds (gemäß B057), Release on Accounting-Start (DELETE), Reject on open radacct.
+- v1.4 (2026-01-14): Redaction + schema tightening. Introduces... uses SQL-first for policy references.
 - v1.3 (2026-01-12): Task-Referenzen entfernt (T02/T09) und auf kanonische Blocks umgestellt (B056/B310).
 - v1.2 (2026-01-09): vpn_connections Feldnamen/SoT vereinheitlicht: token -> claim_token_hash; subaccount_secret -> subaccount_nt_hash; Pflichtfelder (subaccount_login, fixed_ip, claim_deadline) im Schema-Block ergänzt; Indizes angepasst.
 - v1.1 (2026-01-08): vpn_connections Schema an v2.1.1 State-Machine angepasst (status PREPROVISIONED/CLAIMED/DISABLED, claim_deadline MUST 180d, Grace/Deadline timestamps, restricted_reason ENUM). Terminologie bereinigt (keine Gates).

@@ -2,11 +2,11 @@ xp-vpn-stack/blocks/B280_PANEL_FEATURES_USER_ADMIN.txt
 ================================================================================
 BLOCK-ID: B280
 TITLE: Panel Features (User/Admin)
-VERSION: v1.11
-DATUM: 2026-01-14
+VERSION: v1.13
+DATUM: 2026-01-20
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B190
+REQUIRES: B050, B060, B155, B166, B190, B200, B220, B270, B285, docs/nft_service_ip_scopes.txt
 INFLUENCES: B310
 OWNER-INTENT: Self-service, weniger Support, klare Trennung.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
@@ -15,12 +15,14 @@ NOTES:
 - Panel-Funktionsumfang ist strikt getrennt (User vs Admin); Admin sieht nur, was für Betrieb nötig ist.
 - Kein Shop/Payment/Marketing: Panel ist Betriebs- und Support-Oberfläche.
 - UI muss Outcome/Reason-Codes korrekt übersetzen (Restricted/Expired/Quota/Unclaimed) und klare Next-Steps anzeigen.
+- Service-SoT: vpn.status zeigt auf SERVICE_WEB 10.77.0.3 (B200 Rewrite). Panel selbst läuft ausschließlich auf SERVICE_WEB (B220), nicht auf SERVICE_DNS 10.77.0.1.
+- Admin-Scope: Admin-Features/Tools sind strikt auf ADMIN_VPN_NET 10.77.2.0/24 begrenzt (Enforcement gemäß docs/nft_service_ip_scopes.txt).
 ================================================================================
 
 1) ZWECK
-- Es gibt eine Panel-Webapp (vpn.status) mit Rollen:
+- Es gibt eine Panel-Webapp (vpn.status -> SERVICE_WEB 10.77.0.3) mit Rollen:
   - Role USER: status, stats, quota, expiry, password change (per connection), allowlist management
-  - Role ADMIN: customer management, create/revoke connections, speed profile, quota, expiry, maintenance banner, abuse tools / walled garden toggles
+  - Role ADMIN: customer management (inkl. Promotion/Demotion via conn_group=ADMIN), create/revoke connections, maintenance banner, abuse tools / walled garden toggles
 - Ziel: Self-service, weniger Support, klare Trennung über Rollen (kein separates /admin Panel notwendig).
 
 2) GRENZEN
@@ -43,7 +45,7 @@ NOTES:
 - Wenn restricted_effective=true:
   - Panel zeigt restricted_reason + klare Handlung (Claim / Quota / Expiry / Manual).
   - Zusätzlich (App-Layer unabhängig von restricted_reason): Wenn Customer PENDING ist, bleibt die Verify-Wall aktiv (Code/Resend/Support).
-  - Panel bleibt erreichbar, auch wenn Internet gesperrt ist (Walled Garden).
+- Panel bleibt erreichbar, auch wenn Internet gesperrt ist (Walled Garden): SERVICE_WEB 10.77.0.3:80/443 muss in der Restricted-Allowlist (B150) erlaubt sein.
 - UNCLAIMED_OVERDUE (Condition; Restricted Reason-Code: R_POLICY_UNCLAIMED_OVERDUE):
   - Panel zeigt für UNCLAIMED Grace alle 3 Formen parallel:
     - Countdown ("noch X Tage")
@@ -72,8 +74,8 @@ NOTES:
 
 
 3) ABHÄNGIGKEITEN
-- Requires: B050, B220, B155, B166
-- Influences: B150
+- Requires: B050, B060, B155, B166, B190, B200, B220, B270, B285, docs/nft_service_ip_scopes.txt
+- Influences: B150, B310
 
 4) INPUTS
 - SQL tables for:
@@ -93,6 +95,22 @@ NOTES:
 - Connection-Details (UI): zeigt vpn_connections.subaccount_login als „VPN-Login“ (read-only). Der Wert ist system-generated und darf im Panel niemals editierbar sein.
 - Password reset uses external mail infra (your mailserver).
 - Stats come from radacct.
+- Promotion / Demotion (Role Change über Admin-Panel) (MUST)
+  - Ziel: Role-Change ist NICHT “Upgrade” bestehender Connections, sondern “Re-Issue” neuer Connections, weil ADMIN einen eigenen conn_group + IP-Bereich hat.
+  - Promotion (User → Admin) (MUST)
+    - Delta-Intention (MUST):
+      - Panel-Admin (Role=ADMIN) erzeugt neue vpn_connection(s) mit conn_group=ADMIN.
+      - IP kommt aus Admin-Pool (gemäß Netplan/Pool-Kanon: B060/B061).
+      - Credentials werden zugestellt (E-Mail) und/oder im Panel angezeigt.
+      - Kern: Beförderung ist neue Connection (neuer Client), nicht “Legacy/Modern wird Admin”.
+  - Demotion (Admin → User) (MUST)
+    - Delta-Intention (MUST):
+      - Alle ADMIN-Connections des Accounts:
+        • sofort disabled_at setzen (effective_state=DISABLED)
+        • optional Hardcut (Session-Kill) für sofortiges Session-Ende
+        • revoked_at setzen → Quarantäne greift (B064)
+    - DoD:
+      - Nach Demotion darf kein Admin-Netz-Traffic mehr laufen.
 
 7) OPTIONAL
 - per-connection "lock to one IP" mode toggle.
@@ -107,10 +125,17 @@ NOTES:
 - Claim #2: User ist über erlaubte bestehende Connection eingeloggt -> Claim Token für neue Connection -> Zuordnung klappt, auch wenn neue Connection nicht aktiv ist; Allowlist kann neue IP optional NICHT zum Login zulassen.
 - UNCLAIMED_OVERDUE Test: unclaimed_grace_until überschritten -> restricted_reason=R_POLICY_UNCLAIMED_OVERDUE; Panel erreichbar; Verify+Claim möglich; nach Claim sofort frei.
 - Admin Grace Reset Test: UNCLAIMED_OVERDUE aktiv -> Admin setzt Grace reset -> restricted entfernt (wenn kein weiterer Grund) -> Internet frei.
+- Service-Target Test: vpn.status resolved (B200 Rewrite) -> Panel erreichbar auf SERVICE_WEB 10.77.0.3 (auch im Restricted/Walled-Garden Fall).
+- Admin-Scope Test: Admin-Only Features sind nur aus ADMIN_VPN_NET 10.77.2.0/24 nutzbar; aus User/Restricted Netzen müssen Admin-Actions zuverlässig verweigert werden (App-Layer + serverseitige ACL, nicht nur UI-Hiding).
+- Promotion/Demotion E2E Smoke (Bezug: B310 Kapitel 1.4):
+  - Promotion erzeugt neue ADMIN-Connections (conn_group=ADMIN), bestehende USER Connections wird deaktiviert und neue admin connection wird erzeugt.
+  - Demotion setzt disabled_at (+ optional Hardcut) und erzwingt DoD: kein Admin-Netz-Traffic mehr.
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.13 (2026-01-22): Promotion/Demotion Contract (Role Change über Admin-Panel) aus B062 in B280 integriert (Owner: Panel Features); B062 wird entfernt, Referenzen/Tests extern nachgezogen.
+- v1.12 (2026-01-20): SERVICE_* SoT konsolidiert: vpn.status -> SERVICE_WEB 10.77.0.3 (B200 Rewrite), Panel-Reachability im Walled-Garden auf SERVICE_WEB präzisiert (B150 Allowlist). Header/Abhängigkeiten konsistent gemacht (REQUIRES inkl. B050/B060/B155/B166/B190/B200/B220/B270/B285 + docs/nft_service_ip_scopes.txt). Admin-Scope explizit auf ADMIN_VPN_NET 10.77.2.0/24 verankert; Tests um Service-Target + Admin-Scope-Verweigerung ergänzt.
 - v1.11 (2026-01-14): restricted_reason kanonisiert: UNCLAIMED_OVERDUE ist Condition-Label, Reason-Code ist R_POLICY_UNCLAIMED_OVERDUE (B342). Tests entsprechend angepasst.
 - v1.10 (2026-01-14): Admin-Feature “Session beenden (Hardcut)” ergänzt (Kill-first). Referenzen: B285 (Security/Privilege Separation), B167 (vpn-session-kill), D012 (Session-Control kanonisch).
 - v1.9 (2026-01-14): UI-SoT ergänzt: display_name (UI-only, max40, Fallback=email, escaped) für Anrede; subaccount_login im Panel sichtbar aber strikt read-only.

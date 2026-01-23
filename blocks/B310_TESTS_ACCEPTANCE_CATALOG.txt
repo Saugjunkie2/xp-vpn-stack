@@ -2,11 +2,11 @@ xp-vpn-stack/blocks/B310_TESTS_ACCEPTANCE_CATALOG.txt
 ================================================================================
 BLOCK-ID: B310
 TITLE: Tests / Acceptance Criteria (E2E-Katalog)
-VERSION: v1.11
-DATUM: 2026-01-14
+VERSION: v1.25
+DATUM: 2026-01-23
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B050, B090, B165, B168, B169, B190, B200, B210, B220, B260, B330, B340, B341, B342, B343
+REQUIRES: B050, B060, B090, B150, B165, B168, B169, B190, B200, B210, B220, B260, B270, B280, B285, B330, B340, B341, B342, B343, docs/nft_service_ip_scopes.txt
 INFLUENCES: alle
 OWNER-INTENT: Abnahmekatalog für Stabilität (SimUse, DNS, /diag, Webstack, MTU/MSS/Offload) — messbar, reproduzierbar.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
@@ -16,6 +16,12 @@ NOTES:
 - Keine „Bauchgefühl“-Validierung; Tests müssen auch Support-fähig sein (1:1 nachstellbar).
 - Netz-/RADIUS-Validierung beinhaltet explizit tcpdump/radsniff-Nachweise (z.B. Calling-Station-Id/SrcIP) wo relevant.
 - Spiegelregel (Variante 2): Source-Blocks dürfen eigene DoD-Listen behalten, aber B310 muss alle MUST-Tests vollständig spiegeln und bleibt kanonische Abnahme-SoT.
+- SoT Targets/Scopes für Tests (kanonisch):
+  - SERVICE_WEB (Panel/Portal/Blockpage/diag): 10.77.0.3 (vpn.status via B200 Rewrite)
+  - ADMIN_VPN_NET: 10.77.2.0/24; USER_VPN_NET (USER = LEGACY + MODERN): 10.77.16.0/20 + 10.77.32.0/20 (Scopes gemäß docs/nft_service_ip_scopes.txt)
+- Terminologie-Kanon (Drift-Guard für Tests):
+  - connection_login (KANON) == subaccount_login (DB-Feld) == PPP Username (RADIUS User-Name)
+  - conn_group (LEGACY/MODERN/ADMIN) ist SQL-first Feld (B055) und darf in Tests/Diag nicht als “ableitbar” behandelt werden.
 ================================================================================
 
 ================================================================================
@@ -27,8 +33,8 @@ NOTES:
   - Expect exactly one ACCEPT, one REJECT/TEMPFAIL (policy-defined)
 - Lock row exists in active_session_locks after ACCEPT (kurzlebiger Guard)
 - Lock released on Accounting-Start (DELETE lock row)
-- Lock TTL = 20s:
-  - Wenn Acct-Start nie kommt (simulate drop): Lock läuft nach ~20s ab
+- Lock TTL = active_session_lock_ttl_seconds (Setting; failsafe/validierung gemäß B057) gemäß B057:
+  - Wenn Acct-Start nie kommt (simulate drop): Lock läuft nach ~active_session_lock_ttl_seconds ab
   - Danach darf ein erneuter Login nicht mehr am Lock scheitern
 - No Takeover:
   - Wenn radacct Session offen ist (stop_time IS NULL) und Janitor nicht schließen darf -> REJECT, kein “takeover”
@@ -41,7 +47,7 @@ NOTES:
 - Pass/Fail (MUST):
   - PASS: exakt 1x ACCEPT + 1x REJECT/TEMPFAIL (policy-defined), nie 2x ACCEPT für gleiche vpn_connection_id/subaccount_login.
   - PASS: Lock existiert nach ACCEPT; Lock wird bei Acct-Start deterministisch entfernt.
-  - PASS: Wenn Acct-Start nie kommt: Lock läuft spätestens nach ~25s ab; Re-Login scheitert nicht dauerhaft am Lock.
+- PASS: Wenn Acct-Start nie kommt: Lock läuft nach Ablauf von active_session_lock_ttl_seconds ab (gemäß B057; inkl. failsafe/validierung dort); kein Dauerlockout.
   - PASS: Wenn radacct live (stop_time NULL) und nicht schließbar => Login REJECT (Fail-Closed), kein Takeover.
   - FAIL: Doppel-ACCEPT, Dauerlockout, oder Takeover trotz live Session.
 - Artifacts (MUST):
@@ -67,10 +73,236 @@ NOTES:
   - nftables counters/ruleset (Gate-Regeln + Zähler), conntrack/counters (optional),
   - Logs: “connect_pending set/unset”, policy-apply result.
 
+## 1.2) IKEv2 Gate-0 (Server-Zertifikat/Trust) + Gate-1 (EAP-MSCHAPv2) – No Bypass (B059)
+- Ziel: Beweist, dass Gate-0/1 sauber getrennt sind und es nie ein “unpoliced window” gibt.
+- Setup (MUST):
+  - ADMIN/MODERN Access-Path aktiv (IKEv2).
+  - Gate-0 ist Trust auf Server-Zertifikat (Public CA); kein Client-Zertifikat.
+  - Policy-Gate/Connect-Gate Mechanik wie im restlichen System (kein Sonderpfad).
+- Tests (MUST):
+0) Dual-Stack Inbound (IPv4 + IPv6):
+   - Setup: Verbindung 1x über IPv4 (A-Record / v4-Path) und 1x über IPv6 (AAAA-Record / v6-Path) aufbauen.
+   - Erwartung: Handshake/Connect funktioniert über beide Paths; Gate-0/1 Semantik identisch (kein Sonderpfad).
+   - Fail: IPv6-Path kann nicht handshaken/verbinden (PH1 Dual-Stack-Inbound nicht erfüllt) oder Gate-0/1 Verhalten driftet zwischen v4/v6.
+1) Untrusted/invalid Server-Zertifikat ODER FQDN/Hostname-Mismatch (Trust-Chain bricht):
+   - Erwartung: Gate-0 FAIL → Tunnel kommt nicht stabil hoch (fail-closed).
+   - Erwartung: keine erfolgreiche AAA/Auth-Phase, keine Policy-Apply.
+2) Trusted Server-Zertifikat + falsches Username/Password:
+   - Erwartung: Gate-0 OK, Gate-1 FAIL (EAP/RADIUS reject) → keine Policy/kein Internet (fail-closed).
+3) Trusted Server-Zertifikat + korrektes Username/Password:
+   - Erwartung: Gate-0 OK, Gate-1 OK → Policy apply deterministisch aus SQL; erst danach Traffic.
+4) User/Pass Rotation:
+   - Erwartung: new pass works, old fails; no stale bypass.
+
+- Artifacts (MUST):
+  - Logs: generische “cert verify failed” / “server auth failed” / “hostname mismatch” (ohne Secret/PEM), EAP FAIL/OK (ohne Enumeration-freundliche Details).
+  - DB: radpostauth/radacct passend; Reason-Codes konsistent (TEMPFAIL_* separat).
+
+## 1.3) Dualstack Slot-Mapping + Panel-Stats SoT (Thema I) (B061)
+- Ziel: Beweist deterministische IP-Zuordnung (ip_slot → fixed_ip/fixed_ipv6) und korrektes Fail-Closed bei Exhaustion; Panel-ONLINE SoT ist Accounting, nicht strongSwan.
+
+1) Determinismus IPv4 (MODERN/ADMIN)
+- Setup: Eine vpn_connection (MODERN oder ADMIN) mit gesetztem ip_slot in DB (B055).
+- Erwartung:
+  - PPP/RADIUS liefert Framed-IP-Address == vpn_connections.fixed_ip (keine Random-Leases).
+  - Reconnect 10x: fixed_ip bleibt identisch.
+- Validierung:
+  - RADIUS Logs + PPP assigned IP + DB fixed_ip matchen.
+  - /diag zeigt ip_slot + fixed_ip stabil (B270/B061).
+
+2) Determinismus IPv6 (nur wenn v6_addr_policy=FIXED_SQL)
+- Setup: MODERN/ADMIN Connection mit v6_addr_policy=FIXED_SQL und Pool-V6 vorhanden (B060/B061).
+- Erwartung:
+  - fixed_ipv6 wird deterministisch aus ip_slot materialisiert und bleibt bei Reconnect stabil.
+  - LEGACY (v6_addr_policy=NONE) hat fixed_ipv6 = NULL und erhält keine IPv6 Route/Addr im VPN.
+- Validierung:
+  - DB fixed_ipv6 + Client IPv6 + /diag fixed_ipv6 stimmen überein (wo aktiv).
+
+3) Pool Exhaustion Fail-Closed
+- Setup: Pool (z.B. ADMIN /24) nahezu voll; tail_reserve_slots aktiv (B061).
+- Erwartung:
+  - Neue Allocations für non-admin schlagen fail-closed fehl (PPP kommt nicht hoch / wird beendet).
+  - Panel/Stats zeigt Ampel RED; allocatable berücksichtigt Tail-Reserve (B061).
+- Validierung:
+  - Apply/Reconcile logs zeigen „no slot available“ (ohne PII-Leak).
+  - Kein „random fallback“ im PPP.
+
+4) Tail-Reserve Break-Glass (ADMIN)
+- Setup: Pool voll, aber Tail-Reserve vorhanden.
+- Erwartung:
+  - ADMIN Connection kann (wenn Regel/Override aktiv) Reserve-Slot erhalten; non-admin nicht.
+- Validierung:
+  - DB zeigt Slot in Reserve-Range; Changelog/Audit vorhanden; /diag sichtbar.
+
+5) ONLINE SoT = Accounting (nicht strongSwan)
+- Setup: Simuliere flap/ghost session (PPP down, strongSwan zeigt evtl. noch SA).
+- Erwartung:
+  - Panel ONLINE basiert auf RADIUS accounting + active_session_locks window (B055/B165/B061).
+  - Janitor räumt Ghost states deterministisch (B168).
+- Validierung:
+  - ONLINE toggles korrekt nach online_window_seconds; strongSwan-status beeinflusst nicht die Truth-Anzeige.
+
+3) Allocator Randomness (ip_slot Vergabe) (Thema C/B064 + B061)
+- Setup: Erzeuge 50 neue vpn_connections (ip_slot NULL), identischer Pool (conn_group gleich), Provisioning/Apply ausführen.
+- Erwartung:
+  - ip_slot Zuweisung ist nicht „lowest available“ monotone Reihenfolge.
+  - Keine offensichtliche Sequenz (.10/.11/.12…) als Default-Pattern; Verteilung wirkt random (CSPRNG).
+  - Mapping bleibt sticky: nach Zuweisung bleibt fixed_ip bei Reconnect stabil (kein Lease-Chaos).
+- Validierung:
+  - DB: ip_slot Werte über die 50 Allocations sind nicht streng aufsteigend ohne Lücken (Anti-Order).
+  - Reconnect 10x: fixed_ip bleibt identisch (B061 Determinismus bleibt gültig).
+
+4) Quarantäne / Reuse-Guard (Thema C/B064)
+- Setup: Connection entziehen (revoked_at setzen), QUARANTINE_DAYS aktiv, versuche Slot/IP sofort wieder zu vergeben.
+- Erwartung:
+  - quarantined IP/Slot ist nicht vergebbar, solange now < revoked_at + QUARANTINE_DAYS.
+  - Failure Reason ist sichtbar (POOL_EXHAUSTED_OR_QUARANTINED), kein stiller Fallback.
+- Validierung:
+  - DB + /diag + counters: eindeutige Ops-Sichtbarkeit, keine „teilweise Provisionierung“ bei Fail.
+
+## 1.4) Panel Admin: Promotion/Demotion (Role Change → Connection Re-Issue) (B280)
+- Ziel: Beweist, dass Promotion Admin-Zugriff als NEUE ADMIN-Connections provisioniert und Demotion Admin-Traffic sofort beendet (DoD: kein Admin-Netz-Traffic nach Demotion).
+
+1) Promotion erzeugt neue ADMIN-Connection (kein „Upgrade“ bestehender Connections)
+- Setup:
+  - Customer existiert, hat zunächst keine Admin-Role.
+  - Es existieren bereits LEGACY/MODERN vpn_connections (optional).
+- Aktion: Promotion (User → Admin) via Panel-Admin (Role=ADMIN) (B280).
+- Erwartung:
+  - Es werden neue vpn_connection(s) angelegt mit conn_group=ADMIN.
+  - Bestehende LEGACY/MODERN Connections bleiben unverändert (conn_group bleibt wie zuvor).
+  - IP-Zuordnung erfolgt aus Admin-Pool (B060).
+- Validierung:
+  - DB-Diff: neue Rows mit conn_group=ADMIN sichtbar; keine conn_group Mutationen an alten Rows.
+  - /diag zeigt conn_group=ADMIN für diese Connections (B270).
+  - RADIUS Auth/Accounting kann mit den neuen Credentials funktionieren (ohne Zugriff auf Admin-Netz vor tatsächlicher Aktivierung).
+
+2) Demotion deaktiviert alle ADMIN-Connections + optional Hardcut
+- Setup:
+  - Customer hat Admin-Role und mindestens eine ADMIN-Connection.
+  - Optional: eine aktive Session auf einer ADMIN-Connection.
+- Aktion: Demotion (Admin → User) (B280).
+- Erwartung:
+  - Alle ADMIN-Connections des Accounts werden DISABLED:
+    - status/effective_state=DISABLED
+    - disabled_at gesetzt
+    - revoked_at gesetzt (Quarantäne/Entzug-Marker)
+  - Optional Hardcut: aktive Session endet sofort (kein „auslaufen bis Reconnect“).
+  - Reconnect-Versuch: RADIUS reject (kein VPN/kein Admin-Traffic).
+- Validierung:
+  - DB: disabled_at + revoked_at gesetzt; conn_group=ADMIN bleibt als Klassifikation bestehen, aber Zustand ist DISABLED.
+  - Accounting/Session: radacct zeigt Stop/Ende (falls Session aktiv war); /diag reflektiert DISABLED.
+  - Netzwerk: kein Admin-Netz-Traffic möglich (siehe Test 3).
+
+3) DoD-Test: Nach Demotion darf kein Admin-Netz-Traffic mehr laufen
+- Setup: wie Test 2 (nach erfolgter Demotion).
+- Erwartung:
+  - Traffic zu Admin-Netzen/Scopes wird geblockt (Policy/Kernel/AAA – je nach Kanonpfad).
+  - Kein „Restzugriff“ via bestehende Session oder DNS/Panel-Umwege.
+- Validierung:
+  - Connectivity-Checks zu Admin-Targets schlagen fehl.
+  - Logs zeigen klaren Failure-Reason (z.B. DISABLED/Demotion), ohne PII-Leak.
+
+## 1.5) nftables / Enforcement / Reachability / DNS / Egress / Anti-Scan (Thema F) (B063)
+
+F-001 (DoD-Log-DoS Bounded):
+- Setup: Erzeuge Scan/Flood Noise auf WAN (z.B. viele NEW UDP flows auf random Ports), parallel legit IPsec Handshake.
+- Erwartung:
+  - Logs bleiben bounded (CONN_NEW_LOG_RATE_PER_SEC greift), keine Disk-Full Situation.
+  - counters/labels sind aussagekräftig (Scan Noise sichtbar ohne Spam).
+- Validierung:
+  - journal + logrotate bounded, “keine stille Degradierung” (B063 9.6).
+
+F-002 (Anti-Scan ohne IKE-Bruch):
+- Setup: Flood erzeugen (NEW), dann IKEv1/v2 handshake testen (UDP 500/4500 + ESP).
+- Erwartung:
+  - IPsec Handshake funktioniert weiterhin unter Last.
+  - RateLimit/Drop betrifft Scan Noise, nicht erlaubte IPsec Flows.
+- Validierung:
+  - IPsec SA kommt hoch, keine “flapping” durch RateLimit (B063 9.1).
+
+F-003 (Service-Net Allowlist Only):
+- Setup: Client (LEGACY) versucht diverse Ports/Ziele in SERVICE_NET.
+- Erwartung:
+  - DNS/Web/NTP erreichbar (nur definierte Ports).
+  - Alles andere zu SERVICE_NET: DROP.
+- Validierung:
+  - nft counters zeigen erlaubte vs geblockte Service-Targets (B063 9.2).
+
+F-004 (DNS Fail-Closed / Kein Bypass):
+- Setup: Client setzt DNS auf extern (8.8.8.8) + testet TCP/UDP 53, optional v6.
+- Erwartung:
+  - DNS wird erzwungen (DNAT/REDIRECT auf SERVICE_DNS), kein externer Fallback.
+  - Bypass-Versuche sind sichtbar (rate-limited labels/counters).
+- Validierung:
+  - Kein NEW DNS Traffic zu extern, counters “DNS_*” sichtbar (B063 9.3).
+
+F-005 (IPv6 Egress: Fail-Closed + NAT66, kein “IPv6-frei”):
+- Setup: ADMIN/MODERN Dual-Stack aktiv; IPv6 Egress ist als NAT66/Masquerade modelliert (analog IPv4 MASQUERADE).
+- Teiltests (MUST):
+  1) Pre-Apply / PENDING:
+     - Erwartung: IPv6 WAN Egress ist geblockt (fail-closed); kein “unpoliced window”.
+     - Erwartung: counters zeigen deny/pending-block (wie Gate-Mechanik).
+  2) Post-Apply / ACTIVE:
+     - Erwartung: IPv6 WAN Egress funktioniert nach erfolgreichem Policy-Apply (NAT66/Masquerade aktiv).
+  3) “Nicht frei” (Guard):
+     - Erwartung: Kein “freies”/unpoliced v6 WAN Egress außerhalb der erlaubten Policy-Pfade (B063 9.4).
+- Validierung:
+  - Nachweis 1): Kein Traffic vor Apply (counters/logs).
+  - Nachweis 2): Traffic erst nach Apply (counters/logs) + IPv6 Egress OK.
+
+F-006 (PH1 Full-Tunnel E2E – keine Split-Leaks, v4 + v6):
+- Ziel: Beweist Full-Tunnel (Default-Route über VPN) und dass v4/v6 Egress nur nach Policy-Apply möglich ist.
+- Setup (MUST):
+  - Ein Client verbindet (LEGACY/PPP oder ADMIN/MODERN/IKEv2).
+  - Policy-Apply Outcome ist “FULL” (nicht restricted), damit Egress erlaubt ist.
+- Teiltests (MUST):
+  1) Pre-Apply / PENDING:
+     - Erwartung: Kein WAN Egress (v4 und v6) bis Policy-Apply SUCCESS (fail-closed).
+  2) Post-Apply / ACTIVE:
+     - Erwartung: Default-Route läuft über VPN (Client sieht “Internet” nur via Tunnel).
+     - Erwartung: v4 Egress OK; v6 Egress OK (Dual-Stack wie spezifiziert; NAT66/Masquerade aktiv, analog IPv4).
+  3) No Split Leak:
+     - Erwartung: Keine direkte WAN-Route am Client vorbei (kein “gleichzeitig VPN + direkt”).
+- Validierung (MUST):
+  - Routes prüfen (v4 + v6): Default-Route zeigt auf VPN-Pfad (PPP oder XFRM-Pfad/Child-SA, je nach Stack).
+  - Egress prüfen (v4 + v6): “Public IP”/Egress-Nachweis zeigt Server-WAN, nicht Client-WAN.
+  - Counters/Logs: “connect_pending set/unset” + “policy-apply SUCCESS” + danach erst Egress-Traffic sichtbar.
+
+F-007 (PH1 Peer-Isolation – Client↔Client block (User-Netz), v4 + v6):
+- Ziel: Beweist, dass User-Clients untereinander nicht kommunizieren können (Peer-Isolation), unabhängig von v4/v6.
+- Setup (MUST):
+  - Zwei User-Clients gleichzeitig verbunden (User-Netz).
+  - Beide sind “ACTIVE” (Policy applied), damit es keine Verwechslung mit pending/fail-closed gibt.
+- Tests (MUST):
+  1) v4 Peer Traffic:
+     - Erwartung: ClientA → ClientB (ICMP/TCP/UDP) ist geblockt.
+  2) v6 Peer Traffic:
+     - Erwartung: ClientA → ClientB (ICMPv6/TCP/UDP) ist geblockt.
+  3) Control:
+     - Erwartung: ClientA → WAN (erlaubter Traffic) funktioniert gemäß Policy, damit klar ist: “nur Peer ist geblockt”.
+- Validierung (MUST):
+  - Ping/ICMP (v4 + v6) FAIL zwischen Clients.
+  - Optional: TCP connect (z.B. Port-Test) FAIL zwischen Clients.
+  - nftables counters/logs zeigen Peer-Isolation-Drop (ohne PII/Leak).
+
+F-008 (PH1 v4/v6 Parität nach Apply – Policy wirkt symmetrisch):
+- Ziel: Beweist, dass eine Policy-Entscheidung (ALLOW/DENY) nach Apply nicht nur für IPv4, sondern auch für IPv6 gleich wirkt (keine Sonderpfade).
+- Setup (MUST):
+  - Ein Client “ACTIVE” mit definierter Policy (FULL oder RESTRICTED).
+  - Testziele: ein IPv4-only Ziel und ein IPv6-only Ziel (oder dual-stack Ziel, getrennt v4/v6 getestet).
+- Tests (MUST):
+  1) Wenn Policy ALLOW (z.B. DNS/HTTP erlaubt):
+     - Erwartung: Zugriff funktioniert sowohl via IPv4 als auch via IPv6.
+  2) Wenn Policy DENY (z.B. HTTP gesperrt / restricted):
+     - Erwartung: Zugriff scheitert sowohl via IPv4 als auch via IPv6 (kein “v6 bypass”).
+- Validierung (MUST):
+  - Gleiche Anwendung/gleicher Zweck, einmal über v4 und einmal über v6 testen (z.B. curl -4 / curl -6 oder äquivalente Methode).
+  - nftables counters/logs zeigen konsistentes ALLOW/DENY für beide Stacks.
 
 ## 2) Stale sessions tests (Ghosts, D012)
 - Simulate ACCEPT without Acct-Start (kritisch):
-  - Erwartung: Lock läuft nach 20s ab (kein Dauerlockout)
+  - Erwartung: Lock läuft nach active_session_lock_ttl_seconds ab (Setting; Failsafe=20s) (kein Dauerlockout)
   - Erwartung: nächster Login scheitert nicht am Lock
 - Simulate missing Accounting-Stop:
   - Erwartung: radacct kann “offen” bleiben -> Login ist zunächst REJECT (Fail-Closed)
@@ -84,7 +316,7 @@ NOTES:
   - “Missing Acct-Stop”: Session normal starten, dann Stop verhindern (kontrolliert) und anschließend Re-Login versuchen.
   - Janitor-Run auslösen (On-Demand oder Timer) und beobachten, ob nur schließbare Ghosts geschlossen werden.
 - Pass/Fail (MUST):
-  - PASS: ACCEPT ohne Acct-Start => Lock läuft nach ~20s aus; kein Dauerlockout.
+  - PASS: ACCEPT ohne Acct-Start => Lock läuft nach ~TTL aus (TTL=active_session_lock_ttl_seconds gemäß B057; inkl. failsafe/validierung dort); kein Dauerlockout.
   - PASS: Missing Acct-Stop => Re-Login initial REJECT (Fail-Closed), danach SUCCESS erst wenn Janitor schließen darf (kein VALID mapping).
   - PASS: Janitor schließt niemals live Sessions mit VALID mapping; nur bereinigbare Ghosts.
   - FAIL: Takeover wird möglich, oder Janitor schließt live Sessions, oder Ghosts bleiben unendlich hängen.
@@ -152,6 +384,14 @@ NOTES:
 - subaccount_login Format + Read-only:
   - Jede neu erzeugte Connection hat subaccount_login, das Regex ^vpn_[a-z2-7]{16}$ matcht.
   - Panel zeigt subaccount_login an, aber es existiert kein Edit-Flow; Update-Versuche (API/POST) werden serverseitig rejected/audited.
+- conn_group SoT (No-Inference) — SECURITY-CRITICAL (B058):
+  - Setup: conn_group=LEGACY, aber fixed_ip absichtlich auf eine ADMIN-range IP setzen (Manipulation / Fehlkonfig).
+  - Erwartung: Segment/Scope bleibt LEGACY (keine „Range-Inference“); Admin-only Tools bleiben unerreichbar; /diag zeigt conn_group=LEGACY.
+  - Fail: Zugriff auf Admin-only Tools gelingt oder Segment kippt aufgrund IP-Range.
+- Verify (Panel) vs AAA (VPN AuthN) — Ebenentrennung (B058):
+  - Setup: Kunde existiert, email_verified_at=NULL (unverified Panel-User), aber vpn_connection ist technisch gültig (status/AAA-Kriterien erfüllt).
+  - Erwartung: Panel blockt Claim/Actions wie beschrieben; AAA-Entscheidung bleibt ausschließlich an vpn_connection/state/policy gebunden (keine implizite Verify-Kopplung).
+  - Fail: Verify wird „heimlich“ zum VPN-Allow/Deny Schalter oder erzeugt Bypass/Leak.
 - UNCLAIMED_GRACE / UNCLAIMED_OVERDUE:
   - Nach Ablauf unclaimed_grace_until: Internet gesperrt (restricted), Panel/Verify/Claim bleibt erreichbar.
   - Claim innerhalb claim_deadline hebt UNCLAIMED_OVERDUE sofort auf (restricted entfernt, sofern kein anderer Grund).
@@ -198,7 +438,7 @@ NOTES:
   - nftables rules present
   - tc qdisc state
 - Steps / Commands (Minimal, MUST):
-  - Request: `GET /diag` (z.B. curl aus Admin/VPN-Netz).
+- Request: `GET /diag` via vpn.status (B200 -> SERVICE_WEB 10.77.0.3), aus USER_VPN_NET (10.77.16.0/20 + 10.77.32.0/20) oder ADMIN_VPN_NET (10.77.2.0/24).
   - Prüfe, dass JSON die genannten Sektionen/Keys enthält (vpn/dns/radius/nftables/tc).
 - Pass/Fail (MUST):
   - PASS: Response ist JSON, HTTP 200, und alle Pflichtsektionen sind vorhanden (auch wenn einzelne “degraded” sind).
@@ -207,18 +447,23 @@ NOTES:
   - Sanitized JSON Sample (ohne Secrets) + Header/Statuscode.
 
 ## DIAG-002 Security
-- Only accessible inside VPN/admin scope
-- No sensitive secrets returned
+- Only accessible inside VPN scope (User + Admin); von WAN darf /diag niemals erreichbar sein.
+- No sensitive secrets returned (nie: PSK, Passwörter, Private Keys, raw Tokens).
+- Optional Admin-Detail (wenn implementiert): erweiterte Felder nur aus ADMIN_VPN_NET 10.77.2.0/24 (oder Role=admin), aber weiterhin ohne Secrets.
 - Steps / Commands (Minimal, MUST):
   - Versuch von WAN (nicht-VPN): `/diag` muss scheitern (timeout/deny/kein route).
-  - Versuch von Admin/VPN: `/diag` muss funktionieren.
+  - Versuch von USER_VPN_NET (10.77.16.0/20 + 10.77.32.0/20): `/diag` muss funktionieren (mindestens Safe-Subset).
+  - Versuch von ADMIN_VPN_NET (10.77.2.0/24): `/diag` muss funktionieren (ggf. mit Admin-Detail, falls vorgesehen).
   - Content-Check: Response auf Secrets prüfen (PSK, Passwords, private keys, raw tokens).
+  - (Wenn Admin-Detail existiert): Verifiziere, dass Admin-only Felder aus USER_VPN_NET nicht sichtbar sind.
 - Pass/Fail (MUST):
-  - PASS: Von WAN nicht erreichbar; von Admin/VPN erreichbar.
+  - PASS: Von WAN nicht erreichbar; von USER_VPN_NET und ADMIN_VPN_NET erreichbar.
   - PASS: Keine Secrets im Body (keine PSK, keine Passwörter, keine Tokens/Hashes die als Credentials nutzbar wären).
-  - FAIL: `/diag` von WAN erreichbar oder Secret-Leak im Output.
+  - PASS (falls Admin-Detail): Admin-only Felder nur aus ADMIN_VPN_NET sichtbar.
+  - FAIL: `/diag` von WAN erreichbar oder Secret-Leak im Output oder Admin-Details in User-Scope sichtbar.
 - Artifacts (MUST):
   - WAN-Test: nmap/curl Ergebnis (sanitized),
+  - User/VPN-Test: JSON Sample + grep/secret-scan Ergebnis (sanitized),
   - Admin/VPN-Test: JSON Sample + grep/secret-scan Ergebnis (sanitized).
 
 ## DIAG-003 Tests
@@ -228,7 +473,7 @@ NOTES:
   - PASS: “healthy” => HTTP 200 + status=healthy; “degraded” => HTTP 200 + status=degraded + reason_codes[] nicht leer; “hard-fail” (falls definiert) => klarer Status, kein Secret-Leak.
   - FAIL: Fehlende reason_codes oder Secrets im Output.
 - Artifacts:
-  - JSON response samples (sanitized) + Access-Control/Scope Nachweis (nur VPN/admin)
+  - JSON response samples (sanitized) + Access-Control/Scope Nachweis (VPN-only; optional Admin-Detail nur aus ADMIN_VPN_NET)
 
 ================================================================================
 4) WEBSTACK HARDENING / INTERNAL-ONLY TESTS
@@ -244,7 +489,8 @@ NOTES:
 - Pass/Fail (MUST):
   - PASS: WAN-scan zeigt nur IKE/NAT-T + ESP (UDP 500/4500 + ESP) als extern sichtbar; Panel/DB/AdGuard UI etc. sind von WAN nicht erreichbar.
   - PASS: UDP 1701 ist von WAN nicht als “Plain L2TP” nutzbar: ein Plain-L2TP Probe ohne IPsec/XFRM erzeugt keine gültige Session/Antwort (und es gibt keinen L2TP-Ingress ohne IPsec).
-  - PASS: Von Admin-Netz ist Panel erreichbar.
+  - PASS: Von USER_VPN_NET (10.77.16.0/20 + 10.77.32.0/20) ist Panel (vpn.status -> SERVICE_WEB 10.77.0.3) erreichbar (inkl. Verify/Claim).
+  - PASS: Von ADMIN_VPN_NET (10.77.2.0/24) sind Admin-Endpunkte erreichbar; aus USER_VPN_NET werden Admin-Endpunkte verweigert (Scope + AuthZ, nicht nur UI-Hiding).
   - FAIL: Irgendein Panel-Port ist von WAN offen.
 - Artifacts:
   - nmap results (WAN vantage) + ss -lntup (server) + nftables ruleset snapshot
@@ -493,6 +739,20 @@ NOTES:
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.25 (2026-01-23): IKEv2 DoD-Konsistenzfix: Artifact-Log-Beispiele im Gate-0/1 Test von “PSK mismatch” auf Zertifikat/Trust-Fehler korrigiert; Changelog-Text v1.16 im IKEv2-Kontext berichtigt (IKEv2 = Server-Zertifikat/Trust + EAP, kein PSK).
+- v1.24 (2026-01-23): Tests entkoppelt von lokalen 20s/25s-Literalen; Lock-TTL referenziert jetzt active_session_lock_ttl_seconds (Failsafe=20s) gemäß B057.
+- v1.23 (2026-01-23): SQL-first SoT-Schärfung in Tests: Lock-TTL nicht mehr als feste „20s/25s“, sondern als Setting active_session_lock_ttl_seconds (inkl. Jitter-Hinweis) formuliert.
+- v1.22 (2026-01-23): PH1 Nachweise ergänzt (nur Testkatalog): Full-Tunnel E2E (v4+v6, no split leak), Peer-Isolation (v4+v6), v4/v6 Policy-Parität nach Apply (kein v6 bypass).
+- v1.21 (2026-01-23): PH1 Closure: IKEv2 Dual-Stack-Inbound Test ergänzt (IPv4+IPv6 Path); F-005 präzisiert (Fail-Closed pre-apply + NAT66/Masquerade post-apply, kein „IPv6-frei“).
+- v1.20 (2026-01-21): Thema C Tests ergänzt (Allocator Randomness ip_slot, Quarantäne/Reuse-Guard) + B061 Allocator-Policy konsistent (random statt lowest).
+- v1.19 (2026-01-21): Thema F Tests ergänzt (Anti-Scan/NEW-Flood bounded logs, Service-Net Allowlist, DNS fail-closed, IPv6 default-deny) (Bezug: B063).
+- v1.18 (2026-01-21): Thema D Tests ergänzt (Promotion erzeugt ADMIN-Connections; Demotion disable+revoked+Hardcut; DoD „kein Admin-Traffic“) (Bezug: B062).
+- v1.17 (2026-01-21): Thema I Tests ergänzt: ip_slot Determinismus (v4/v6), Pool-Exhaustion Fail-Closed, Tail-Reserve Break-Glass, ONLINE SoT via Accounting (Bezug: B061).
+- v1.16 (2026-01-21): IKEv2 Gate-0/1 Tests ergänzt (Server-Zertifikat/Trust + EAP-MSCHAPv2; kein PSK) (Bezug: B059) + Header-Version an Changelog angeglichen (Format-Konsistenz).
+- v1.15 (2026-01-21): E2E-Tests ergänzt: conn_group No-Inference + Verify-vs-AAA Ebenentrennung (Bezug: B058).
+- v1.14 (2026-01-20): K2 Ref-only: Terminologie-Drift-Guard (connection_login/subaccount_login/PPP Username) + conn_group als SQL-first in den Test-Kanon aufgenommen.
+- v1.13 (2026-01-20): K1-Konsistenz: USER_VPN_NET Referenzen von „10.77.10.0/24“ auf USER=(LEGACY 10.77.16.0/20 + MODERN 10.77.32.0/20) umgestellt (NOTES + /diag + Panel-Reachability Tests). Targets bleiben: SERVICE_WEB 10.77.0.3, ADMIN 10.77.2.0/24.
+- v1.12 (2026-01-20): SoT-Konsistenz: REQUIRES um B060/B150/B270/B280/B285 + docs/nft_service_ip_scopes.txt erweitert; Service-/Scope-Targets in NOTES normiert (vpn.status -> SERVICE_WEB 10.77.0.3; ADMIN_VPN_NET 10.77.2.0/24; USER_VPN_NET 10.77.10.0/24). /diag Security-Test konsistent zu VPN-only (User+Admin) + optional Admin-Detail; WEB-002 Panel-Reachability und Admin-Endpunkt-Scope präzisiert.
 - v1.11 (2026-01-14): B340 Mirror ergänzt: F2B-000 OK/ACCEPT Emission als MUST-Test (Class=OK, Outcome=OK, Reason=R_OK) inkl. RFC3986 Percent-Encoding + NA-Marker + Caps (User<=64, Detail<=256). Keine Änderung an bestehenden FAIL2BAN/Jail-Tests.
 - v1.10 (2026-01-14): Redaktion/Konsistenz: NOTES-Spiegelregel-Zeile repariert (DoD-Text nicht beschädigt); kleine Drift in 3) E2E validation behoben („vpn_connection“ -> „vpn_connection_id“). Keine Testlogik geändert.
 - v1.9 (2026-01-14): Terminologie-Fix: „Wrong-Token“ im Claim-Test präzisiert auf „Wrong-claim_token“ (kein unqualifiziertes Token).

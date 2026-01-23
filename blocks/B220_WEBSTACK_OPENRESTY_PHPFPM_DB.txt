@@ -2,13 +2,13 @@ xp-vpn-stack/blocks/B220_WEBSTACK_OPENRESTY_PHPFPM_DB.txt
 ================================================================================
 BLOCK-ID: B220
 TITLE: Webstack intern (OpenResty + PHP-FPM + DB + phpMyAdmin)
-VERSION: v1.0
-DATUM: 2026-01-06
+VERSION: v1.2
+DATUM: 2026-01-21
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B060, B150, B200
-INFLUENCES: B240
-OWNER-INTENT: Panel/Portal/Blockpage auf interner Service-IP, niemals WAN.
+REQUIRES: B050, B060, B150, B200, docs/nft_service_ip_scopes.txt
+INFLUENCES: B230, B240, B270
+OWNER-INTENT: Panel/Portal/Blockpage auf SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3) im SERVICE_NET, niemals WAN.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
 NOTES:
@@ -29,11 +29,11 @@ NOTES:
 - phpMyAdmin admin-only.
 
 3) ABHÄNGIGKEITEN
-- Requires: B060, B050
-- Influences: B230, B240, B270, B280
+- Requires: B050, B060, B150, B200, docs/nft_service_ip_scopes.txt
+- Influences: B230, B240, B270
 
 4) INPUTS
-- Bind: 10.77.0.1:80/443
+- Bind: SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3):80/443
 - PHP-FPM local socket/localhost
 - DB local (MySQL/MariaDB)
 
@@ -42,8 +42,8 @@ NOTES:
 - Admin accessible additionally: phpMyAdmin (separate vhost/path + firewall)
 
 6) MUST
-- OpenResty only listens on 10.77.0.1
-- firewall defines user/admin access (user cannot reach pma)
+- OpenResty only listens on SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3) (kein 0.0.0.0, kein WAN-bind)
+- firewall/vhost-scope definiert user/admin access: user/restricted dürfen niemals phpMyAdmin erreichen; admin-only Source-IP ist ADMIN_VPN_NET 10.77.2.0/24 (gemäß docs/nft_service_ip_scopes.txt)
 - TLS for panel (trusted via CA import)
 
 7) OPTIONAL
@@ -53,15 +53,17 @@ NOTES:
 
 8) FEHLERBILDER
 - User can reach phpMyAdmin -> firewall/vhost wrong
-- Web reachable from WAN -> bind wrong
+- Web reachable from WAN -> bind/firewall wrong (SERVICE_WEB 10.77.0.3 darf nie WAN-exposed sein)
 
 9) TESTS
-- From WAN: cannot connect to 80/443.
-- From user net: can open panel only.
-- From admin net: can open admin tools.
+- From WAN: cannot connect to SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3):80/443 (SERVICE_WEB ist nie WAN-exposed; Bind+Firewall müssen das erzwingen).
+- From user (LEGACY/MODERN, nicht restricted): can open panel/portal/diag on SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3) only; cannot access admin tools.
+- From admin (ADMIN_VPN_NET 10.77.2.0/24): can open admin tools zusätzlich, aber weiterhin nur intern via SERVICE_WEB (10.77.0.3 / fd77:0:0:0::3).
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.2 (2026-01-22): SERVICE_WEB überall dualstack (v4+v6) referenziert (Bind/MUST/TESTS); IPv6 läuft parallel zu IPv4 (gleichwertig) für ADMIN+MODERN.
+- v1.1 (2026-01-20): Webstack auf SERVICE_WEB 10.77.0.3:80/443 umgestellt (statt 10.77.0.1); REQUIRES/INFLUENCES/Dependencies konsistent gemacht (inkl. docs/nft_service_ip_scopes.txt); MUST/Testfälle auf ADMIN_VPN_NET 10.77.2.0/24 + SERVICE_WEB präzisiert.
 - v1.0: Initial
 ================================================================================

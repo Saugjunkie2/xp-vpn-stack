@@ -1,0 +1,86 @@
+xp-vpn-stack/blocks/B064_IP_LIFECYCLE_DRIFT_GUARDS_RECONCILE.txt
+================================================================================
+BLOCK-ID: B064
+TITLE: IP-Lifecycle, Drift-Guards, Reconcile (Thema C)
+VERSION: v1.1
+DATUM: 2026-01-22
+STATUS: ACTIVE
+PRIORITY: MUST
+REQUIRES: B055, B057, B058, B060, B061, B150, B155, B166, 02_GLOSSAR.txt
+INFLUENCES: B062, B270, B310, PH1–PH10
+OWNER-INTENT: Kanonische Übernahme von Thema C (1:1 aus ENTWURF): IP-Lifecycle (Soft-Delete), Quarantäne, Random ip_slot Allocation (CSPRNG), Drift-Guards, Reconcile.
+OWNER: Marco (Owner) + ChatGPT (Co-Architect)
+================================================================================
+
+NOTES:
+- Inhalt ist 1:1 aus ENTWURF „=== C) IP-Lifecycle, Drift-Guards, Reconcile ===“ übernommen („so wie es ist“).
+- Random ip_slot Allocation (CSPRNG) ist kanonisch (Thema C). B061 wurde entsprechend angepasst (siehe Patch in dieser Runde).
+
+=== C) IP-Lifecycle, Drift-Guards, Reconcile ===
+
+5) IP-Lifecycle: Soft-Delete + Quarantäne + Reuse-Policy (SQL/Panel)
+  5.1 Soft-Delete Grundsatz (no physical delete) (MUST)
+    Norm (MUST):
+      Es wird im Normalbetrieb nicht physisch gelöscht (DELETE), sondern logisch entzogen (facts-only, computed state):
+      - disabled_at gesetzt (Admin Hard-Disable; effective_state=DISABLED)
+      - revoked_at gesetzt (Zeitpunkt Entzug; Quarantäne ist computed über revoked_at + QUARANTINE_DAYS)
+
+    Ziel:
+      Audit/Logs bleiben konsistent; IPs werden nicht sofort recycelt.
+
+  5.2 Quarantäne-Fenster (MUST)
+    Norm (MUST):
+      IP ist quarantined, wenn:
+      - revoked_at IS NOT NULL und now < revoked_at + QUARANTINE_DAYS
+      quarantined IP ist nicht vergebbar.
+
+    Norm (MUST):
+      QUARANTINE_DAYS ist kanonischer Parameter (kein Magic).
+
+  5.3 IP-Allocator Regel (MUST)
+    Norm (MUST):
+      Beim Provisioning einer neuen vpn_connection:
+      - Pool bestimmen über conn_group.
+      - Vergabe erfolgt über einen gemeinsamen Slot (ip_slot) als Primärwert:
+        • ip_slot ist random (CSPRNG) (Anti-Order/Anti-Enumeration).
+        • ip_slot ist im Pool eindeutig.
+        • IPv4 und IPv6 werden deterministisch aus ip_slot abgeleitet (ein „Paar“ pro Connection).
+      - allocator muss „bounded“ sein (keine Endlosschleife) und muss mit Race Conditions umgehen.
+
+    Ziel:
+      Keine monotone Reihenfolge (… .10, .11, .12) → erschwert Enumeration/Abuse und verhindert „Order-Leaks“.
+
+  5.4 Reuse-Policy (MUST)
+    Norm (MUST):
+      - Reuse eines Slots ist erst möglich, wenn:
+        • revoked_at IS NOT NULL und now >= revoked_at + QUARANTINE_DAYS
+      - disabled_at (Hard-Disable) ist ein eigenes Gate und darf Reuse nicht automatisch erzwingen.
+
+    Ziel:
+      Quarantäne schützt vor „IP Reuse-Confusion“ (Logs/Abuse/Correlation).
+
+  5.5 Drift-Guards (MUST)
+    Norm (MUST):
+      - Wenn ip_slot gesetzt ist, dürfen fixed_ip/fixed_ipv6 nicht „driften“.
+      - Reconcile muss drift reparieren (fixed_* neu materialisieren) ohne neue Slots zu verbrauchen.
+      - Reconcile darf nicht in kaputten Zuständen hängen bleiben.
+
+    Ziel:
+      Selbstheilung ohne „Allocator-Churn“.
+
+  5.6 Failure Modes (MUST)
+    Norm (MUST):
+      - Pool exhausted oder alles quarantined:
+        • klarer Failure-Reason (POOL_EXHAUSTED_OR_QUARANTINED)
+        • deterministische Ops-Sichtbarkeit (Counters/Diag), kein stilles Verhalten
+      - DB write fail:
+        • keine teilweise Provisionierung (atomar/transactional)
+      - Doppel-Inputs:
+        • Idempotenz: apply mehrfach darf nicht neue Slots verbrauchen
+
+================================================================================
+CHANGELOG
+================================================================================
+- v1.1 (2026-01-22): PH-System auf B290 (PH1–PH10) erweitert: B064 gilt über alle Phasen (PH1–PH10) als Drift-Guard/Reconcile-Grundlage.
+- v1.0 (2026-01-21): Neu: Thema C 1:1 aus ENTWURF übernommen (IP-Lifecycle, Quarantäne, Random ip_slot Allocation, Drift-Guards, Reconcile).
+================================================================================

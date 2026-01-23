@@ -1,0 +1,161 @@
+xp-vpn-stack/blocks/B063_NFT_ENFORCEMENT_ANTISCAN_EGRESS_DNS.txt
+================================================================================
+BLOCK-ID: B063
+TITLE: nftables / Enforcement / Reachability / DNS / Egress / Anti-Scan (Thema F)
+VERSION: v1.1
+DATUM: 2026-01-22
+STATUS: ACTIVE
+PRIORITY: MUST
+REQUIRES: B057, B060, B100, B110, B120, B130, B140, B166, B340, B341, docs/nft_service_ip_scopes.txt, 02_GLOSSAR.txt
+INFLUENCES: B200, B210, B230, B240, B270, B310, PH1–PH4
+OWNER-INTENT: Kanonische Übernahme von Thema F: nftables Enforcement (Anti-Scan/RateLimit), Reachability-Contracts (Service-Net), DNS-/Egress-Leak-Guards, Logging/Debuggability + DoD.
+OWNER: Marco (Owner) + ChatGPT (Co-Architect)
+================================================================================
+
+NOTES:
+- Inhalt basiert auf ENTWURF „=== F) nftables / Enforcement...ty / DNS / Egress / Anti-Scan ===“; v1.1 hat den 9.4 Egress-Contract auf Dualstack-Parität (NAT66 aktiv für ADMIN/MODERN, LEGACY v4-only) kanonisch korrigiert.
+- Wenn Begriffe/Keys hier im Widerspruch zu 02_GLOSSAR/B055 stehen, gilt: Glossar/Schema definieren die kanonische Zuordnung.
+
+=== F) nftables / Enforcement / Reachability / DNS / Egress / Anti-Scan ===
+
+9) nftables / Enforcement / Reachability / DNS / Egress / Anti-Scan
+
+  9.0 Ziel (MUST)
+    - nft ist das zentrale Enforcement für:
+      • WAN-Exposure (B100)
+      • L2TP nur via IPsec/XFRM (B110)
+      • Full-Tunnel NAT/Forward (B120)
+      • Peer-Isolation (B130)
+      • Abuse-Blocks (B140)
+      • Restricted Mode Sets + Walled Garden (B150/B166)
+      • DNS-Zwang / DNS-Fail-Closed (B210)
+      • (Thema F) Anti-Scan / RateLimit / deterministische Reachability
+
+  9.1 Anti-Scan / RateLimit (MUST)
+    Problem:
+      - Öffentliche WAN-Interfaces sind scanbar (auch wenn nur UDP 500/4500 + ESP offen).
+      - Zusätzlich entstehen Lastspitzen durch “conntrack NEW floods” (auch UDP).
+      - Logging kann selbst zum DoS-Vektor werden.
+
+    Canon:
+      - nft muss “NEW” rate-limiten (conntrack state NEW), bevor es teuer wird.
+      - Logging ist strikt rate-limited (pro Source/Global), sonst Disk/CPU DoS.
+      - RateLimits sind als Settings/Parameter modelliert (SQL-first, B057), nicht als Magic Numbers.
+
+    Must-Behavior:
+      - Für INPUT (WAN):
+        • ct state NEW: rate limit per source (oder global) + drop
+        • ct state ESTABLISHED/RELATED: normal allow (wenn Port/Proto passt)
+      - Für FORWARD:
+        • ct state NEW: rate limit (per PPP-Client-IP oder global), bevor NAT/Policy greift
+      - Logging:
+        • Nur “sampled logging” (rate-limited) + counters als SoT
+        • Keine Secrets/PII in Logs (nur Event-Labels)
+
+    Settings Keys (Bezug B057) (MUST):
+      - CONN_NEW_RATE_PER_SEC
+      - CONN_NEW_BURST
+      - CONN_NEW_LOG_RATE_PER_SEC
+      - (OPTION) CONN_NEW_RATE_ADMIN_MULTIPLIER
+
+    DoD:
+      - DoD-1: 100k UDP Flood auf WAN erzeugt keine Disk-Full/CPU-Death (Logs bleiben bounded).
+      - DoD-2: Legit IPsec handshake funktioniert weiterhin (UDP 500/4500 + ESP) unter Last.
+      - DoD-3: “scan noise” ist sichtbar (counters/labels), aber nicht “log spam”.
+
+  9.2 Reachability-Contracts (Service-Net) (MUST)
+    Problem:
+      - Service-IPs (10.77.0.x) sind “infra-only”.
+      - Trotzdem müssen gewisse Dienste für Clients erreichbar sein:
+        • DNS (10.77.0.1)
+        • Web/Blockpage/Portal (10.77.0.3)
+        • NTP (10.77.0.4)
+      - Gleichzeitig darf Service-Net nicht “frei routbar” werden.
+
+    Canon:
+      - Service-Net ist “allowlist only”:
+        • Clients dürfen nur definierte Service-IPs/Ports erreichen.
+        • Service-Net darf niemals als allgemeines LAN missbraucht werden.
+      - Admin hat ggf. erweiterte Reachability (z.B. UI ports), aber strikt scoped (B285 + nft scopes).
+
+    Must-Behavior:
+      - LEGACY (XP):
+        • DNS: UDP/TCP 53 -> SERVICE_DNS
+        • Web: TCP 80/443 -> SERVICE_WEB (Portal/Blockpage)
+        • NTP: UDP 123 -> SERVICE_NTP
+        • Alles andere zu SERVICE_NET: DROP
+      - ADMIN/MODERN:
+        • DNS/Web/NTP identisch
+        • zusätzliche Admin-only Ports (z.B. AdGuard UI 2000, pma) nur aus Admin-Netz, nicht aus User-Netz.
+
+    DoD:
+      - DoD-1: User kann DNS/Web/NTP erreichen, aber keine anderen SERVICE_NET Ziele/Ports.
+      - DoD-2: Admin-only Dienste sind aus User-Netz nicht erreichbar (even if route exists).
+      - DoD-3: nft set/scopes sind SoT (siehe docs/nft_service_ip_scopes.txt).
+
+  9.3 DNS Enforcement / Fail-Closed (MUST)
+    Canon:
+      - DNS-Zwang (B210) ist “hart”: TCP+UDP 53 werden DNAT/REDIRECT auf SERVICE_DNS umgeleitet.
+      - Es gibt keinen “Fallback nach extern”.
+      - Wenn SERVICE_DNS down ist, ist DNS down (fail-closed), nicht “bypass”.
+
+    Must-Behavior:
+      - Bypass-Versuche (z.B. hardcoded 8.8.8.8, DoH, etc.) müssen sichtbar sein:
+        • counters / rate-limited log labels (“DNS_ENFORCED_V6” / “DNS_BYPASS_BLOCKED_V6” o.ä.), ohne Secrets/PII.
+
+    DoD:
+      - DoD-1: Leak-Freiheit: Bei generierten AAAA-Queries von ADMIN/MODERN gibt es keine externen v6 DNS NEW flows.
+      - DoD-2: “DNS down” ist opsseitig sichtbar (counters/labels), keine stille Degradierung.
+
+  9.4 Egress (IPv4/v6) (MUST)
+    Problem:
+      - Full-Tunnel für IPv4 ist klar (NAT44/Masquerade).
+      - Für ADMIN/MODERN ist IPv6 gleichwertig zu IPv4 (Dualstack). Damit MUSS auch v6-Egress kontrolliert (nicht “unpoliced”) und konsistent erzwungen werden.
+      - LEGACY bleibt IPv4-only; daraus folgt: kein v6-Egress-Path für LEGACY (weder DNS noch Internet).
+
+    Canon:
+      - ADMIN/MODERN: IPv6-Egress ist aktiv und wird via NAT66/Masquerade erzwungen (Contract siehe B120).
+        • Kein “direct routed” Client-v6 zum Provider ohne NAT66.
+        • Policy-Parität: v6 unterliegt denselben Enforcement-Punkten wie v4 (Restricted Mode, Allowlists, Abuse-Blocks, RateLimits).
+      - LEGACY: bleibt IPv4-only; v6 Traffic aus LEGACY existiert nicht (und wird nicht als Feature eingeführt).
+      - Debuggability: v6-Egress muss über counters/labels genauso nachvollziehbar sein wie v4 (kein “silent v6 path”).
+
+    DoD:
+      - DoD-1: ADMIN/MODERN Dualstack Full-Tunnel: v6-Internet erreichbar, Egress sichtbar als NAT66 (Counter/Trace).
+      - DoD-2: Kein unpoliced v6 WAN Egress: Alle v6-Client-Egress-Flows aus ADMIN/MODERN passieren den definierten NAT66+Policy-Pfad.
+      - DoD-3: LEGACY erzeugt keinen v6 Egress; (Negativtest) v6-Targets sind aus LEGACY nicht erreichbar.
+
+  9.5 Restricted Mode Interaktion (MUST)
+    Canon:
+      - Restricted Mode blockt Internet, aber lässt Portal/DNS/NTP erreichbar (B150/B166).
+      - Anti-Scan darf Restricted nicht “kaputt machen”:
+        • Portal/DNS/NTP müssen trotz RateLimit funktionieren.
+      - Restricted ist Kernel-Enforcement (nft/tc), unabhängig vom Panel-Verify.
+
+    DoD:
+      - DoD-1: Restricted Clients erreichen Portal/DNS/NTP deterministisch.
+      - DoD-2: Flood/Scan RateLimits greifen trotzdem (keine bypass).
+
+  9.6 Logging/Debuggability (MUST)
+    Canon:
+      - Für jeden Egress-Entscheid (ALLOW/DENY/REDIRECT) existieren counters/Reason-Codes mindestens zonenweise:
+        - “EGRESS_WAN_V4_ALLOWED_Zx”
+        - “EGRESS_WAN_V4_DENIED_RESTRICTED_Zx”
+        - “EGRESS_WAN_V6_ALLOWED_Zx”
+        - “EGRESS_WAN_V6_DENIED_RESTRICTED_Zx”
+        (Bezeichner sind Beispiele; wichtig ist deterministische Trennbarkeit pro Zone.)
+
+    DoD:
+      - DoD-1: Admin kann aus counters erkennen, warum Traffic nicht geht (Zone/Reason).
+      - DoD-2: Logs rotieren bounded (kein Disk-Full).
+      - DoD-3: Fehlerfall (DNS down / SQL down / restricted) ist opsseitig sichtbar (keine stille Degradierung).
+
+================================================================================
+CHANGELOG
+================================================================================
+- v1.1 (2026-01-22): Kanon-Fix zu Dualstack-Contract: 9.4 Egress v6 von “default-deny bis Contract” auf “NAT66 aktiv + Policy-Parität für ADMIN/MODERN” umgestellt; LEGACY bleibt v4-only.
+- v1.0 (2026-01-21): Initialer Kanon-Block aus ENTWURF übernommen (Thema F).
+================================================================================
+================================================================================
+ENDE B063_NFT_ENFORCEMENT_ANTISCAN_EGRESS_DNS.txt
+================================================================================

@@ -1,0 +1,241 @@
+ Claim-Policy (MUST, driftarm, SQL-first):
+        • SoT-Facts:
+          - unclaimed_grace_until (timestamp): Warnphase-Ende für ungeclaimte Connections
+          - claim_deadline (timestamp): Hard-Stop für ungeclaimte Connections (180 Tage ab created_at)
+          - claimed_at (timestamp nullable): Claim-Fakt (gesetzt = geclaimed)
+
+        • Initialwerte (MUST):
+          - unclaimed_grace_until = NOW() + INTERVAL 30 DAY
+          - claim_deadline        = created_at + INTERVAL 180 DAY
+          - ADMIN ist von Claim ausgenommen (claim_policy=none)
+
+        • Reset (Admin-only) (MUST):
+          - Reset bedeutet: unclaimed_grace_until = NOW() + INTERVAL 30 DAY
+          - Reset verändert NICHT claim_deadline (Hard-Stop bleibt an created_at gebunden).
+          - Claim-Token Lifecycle (MUST, FEST):
+            • claim_token hat KEINE separate TTL/Config (kein eigener Timer/Setting).
+              Der Token-Lifecycle ist an die Lebensphase der unclaimed Connection gebunden.
+            • Gültigkeit (MUST):
+              - claim_token ist gültig solange: claimed_at IS NULL AND NOW() < claim_deadline
+                (also innerhalb der 180-Tage Claim-Lebensphase).
+              - Sobald claimed_at gesetzt ODER NOW() >= claim_deadline: Token ist ungültig
+                (Claim nicht mehr möglich; Hard-Stop greift).
+            • Reset (Admin-only) (MUST):
+              - Reset rotiert den claim_token NICHT automatisch.
+              - Reset betrifft nur unclaimed_grace_until (Warnphase neu starten), nicht claim_deadline.
+            • Regenerate/Resend (USER via Panel → SYSTEM) (MUST):
+              - Zweck: Token verloren/vergessen → User kann im Panel einen neuen Token anfordern.
+              - Wirkung: neuer claim_token wird erzeugt, claim_token_hash wird ersetzt,
+                alter Token ist sofort ungültig (single-valid-token).
+              - Ausgabe/Transport: Token wird dem User bereitgestellt (WebPanel E-Mail Regenerate Claim_token send).
+		Panel zeigt den Token nur im Moment der Generierung; später nur via Resend/Regenerate.
+                Klartext-Token wird nicht persistiert, nur Hash (SoT bleibt SQL-first).
+            • Guardrails (MUST):
+              - nur nach Login + email_verified_at gesetzt (USER ist ACTIVE im Panel-Contract).
+              - Rate-Limit für Resend/Regenerate (um Mail-Gatling/Abuse zu verhindern).
+              - keine Status-Enumeration: UX-Message ist generisch (kein Leak ob/welche Connection existiert).
+            • Audit (MUST):
+              - Resend/Regenerate erzeugt ein Audit-Event (wer/wann/welche vpn_connection).
+              - Admin-Reset ebenfalls auditpflichtig.
+
+        • Computed Claim-Phasen (MUST, nur wenn claim_policy=REQUIRED):
+          - CLAIM_REQUIRED (Warnphase, gelb): Die VPN-Connection ist noch keinem Panel-User zugeordnet (keine ‘Verheiratung’). Ab Start läuft ein 30-Tage-Timer. Netzpolicy bleibt normal (kein Walled Garden / kein Restricted Overlay). Zweck: Käufer soll im Panel registrieren und via claim_token die Zuordnung bestätigen.
+            Bedingung: claimed_at IS NULL AND NOW() <= unclaimed_grace_until AND NOW() < claim_deadline
+            Wirkung: Panel/UI erinnert sichtbar (Warnphase); KEIN Restricted Overlay/Walled Garden. Restricted beginnt erst bei UNCLAIMED_OVERDUE (NX-05).
+          - UNCLAIMED_OVERDUE (Restricted, rot): 30-Tage-Frist abgelaufen, Connection weiterhin unzugeordnet. Restricted Overlay / Walled Garden aktiv: Internet-Egress gesperrt, interne Services (z.B. Panel/DNS/NTP/Support) bleiben erreichbar. Zweck: Claim erzwingen, ohne Support/Onboarding abzuschneiden.
+            Bedingung: claimed_at IS NULL AND NOW() > unclaimed_grace_until AND NOW() < claim_deadline
+            Wirkung: Walled Garden / Restricted Overlay (NX-05).
+          - DISABLED (computed DENY, Hard-Stop):
+            Bedingung: claimed_at IS NULL AND NOW() >= claim_deadline
+            Wirkung: AAA deny (kein VPN), ohne Job/Worker (rein computed).
+
+        • DB down / Unknown (MUST, fail-closed):
+          - SQL/DB nicht erreichbar ODER Policy-State nicht deterministisch berechenbar → Fail-Closed Verhalten gemäß NX-07.
+          - Neue Sessions/AuthN: AAA deny (gilt auch für ADMIN; keine Ausnahmen).
+          - Bestehende Sessions: Verhalten + Enforcement + Admin-Ops sind kanonisch in NX-07 festgezogen (kein “Allow by accident”).
+
+    Begründung (Designziel):
+      Admin “ist frei” nicht per IP-Ausnahmen, sondern weil Admin-Connections in einem
+      eigenen Netz/Pools liegen und damit automatisch in die Admin-Policy fallen.
+
+
+
+
+- Stored Facts (SoT) — vpn_connection (MUST, semantisch):
+  • connection_id (PK, intern)
+  • connection_login (unique; Gate-1 Identity für AAA; bindet Policy an vpn_connection)
+  • Terminologie-Hinweis (MUST):
+    - Im Text bedeutet “vpn_connection” die fachliche Entity (eine konkrete Verbindung/Instanz).
+    - Der physische SQL-Tabellenname kann “vpn_connections” (Plural) heißen; das ist kein Widerspruch, solange die Felder 1:1 der Entity entsprechen.
+  • conn_group (Primary Policy Key)
+  • fixed_ip (immutable; unique im jeweiligen v4-Pool/Scope)
+  • fixed_ipv6 (nullable für LEGACY; immutable; unique im jeweiligen v6-Prefix/Pool)
+  • created_at (audit)
+  • disabled_at (nullable; Admin Hard-Disable)
+  • revoked_at (nullable; Entzug/Soft-Delete; Quarantäne wird computed)
+  • claimed_at (nullable; falls Claim aktiv ist)
+  • unclaimed_grace_until (timestamp; falls Claim aktiv ist; Warnphase-Ende; Admin-resettable via Claim-Reset)
+  • claim_deadline (timestamp; falls Claim aktiv ist; Hard-Stop für ungeclaimte Connections; initial = created_at + 180 Tage; immutable)
+  • pw_nt_hash (Credential-Material; kein Klartext; SQL-first)
+  • unclaimed_grace_until (nullable; falls Claim aktiv ist; Warnphase-Ende für ungeclaimte Connections; Reset verändert dieses Feld)
+  • claim_deadline (nullable; falls Claim aktiv ist; Hard-Stop für ungeclaimte Connections; initial = created_at + 180d; Reset verändert NICHT dieses Feld)
+
+- Computed effective_state (MUST, feste Priorität; Fail-Closed):
+  Reihenfolge (höchste Priorität zuerst):
+
+    1) DISABLED (AAA deny, kein VPN):
+       Bedingung:
+         - disabled_at IS NOT NULL
+         ODER
+         - (Claim aktiv) claimed_at IS NULL AND now >= claim_deadline
+       Wirkung:
+         - AAA deny (kein VPN) ist zwingend.
+         - Claim/Verify kann DISABLED niemals überstimmen.
+         - Hinweis: disabled_at ist “Admin Hard-Disable”; claim_deadline ist “computed Hard-Stop” (kein Job/Worker nötig).
+
+    2) REVOKED_QUARANTINED:
+       Bedingung: revoked_at IS NOT NULL AND now < revoked_at + QUARANTINE_DAYS
+       Wirkung: Connection ist “parked”; IPs (v4+v6) unvergebbar; keine Reaktivierung ohne neue Connection.
+
+    3) REVOKED_EXPIRED:
+       Bedingung: revoked_at IS NOT NULL AND now >= revoked_at + QUARANTINE_DAYS
+       Wirkung:
+         - Nur die IP-Reuse-Sperre endet: fixed_ip/fixed_ipv6 gelten nach Ablauf der Quarantäne wieder als “free/allocatable”; Uniqueness gilt nur für gleichzeitig aktive/ALLOCATED Zuweisungen (revoked_at IS NULL).
+         - Nur die IP-Reuse-Sperre endet: fixed_ip/fixed_ipv6 dürfen wieder als “free” gelten, sofern das Reuse-Design das vorsieht.
+         - Reaktivierung erfolgt ausschließlich durch neue vpn_connection (neue Identity), nicht durch “Unrevoke”.
+		 
+		 Hinweis: Verify (email_verified_at) ist ein Panel-User-Gate und wird nicht im vpn_connection effective_state abgebildet.
+		Claim-States betreffen die vpn_connection (Zuordnung/Verheiratung), nicht den Panel-User-Verify.
+		
+    4) CLAIM_REQUIRED / UNCLAIMED_OVERDUE (falls Claim aktiv ist):
+       Vorbedingung: claimed_at IS NULL AND now < claim_deadline
+       - CLAIM_REQUIRED (Warnphase):
+         Bedingung: now <= unclaimed_grace_until
+         Wirkung: Panel/UI erinnert sichtbar (gelb).
+       - UNCLAIMED_OVERDUE (Restricted):
+         Bedingung: now > unclaimed_grace_until
+         Wirkung: Walled-Garden / Restricted Overlay (NX-05) (rot).
+
+    5) ACTIVE:
+       Bedingung: keiner der obigen Gründe greift
+       Wirkung: normale Policy aus conn_group (Zone/Pools/Stack).
+
+  Drift-Guard (MUST):
+    • Es gibt kein Feld “status=ACTIVE/REVOKED/QUARANTINED” als SoT.
+    • Performance-Optimierung darf über VIEW/Generated Columns erfolgen, aber Facts bleiben SoT.
+
+- Write-Path Matrix (MUST; AuthZ-by-Design):
+  • Provisioning (SYSTEM/ADMIN):
+    - DARF setzen: connection_login, conn_group, fixed_ip, fixed_ipv6, pw_nt_hash, created_at
+    - MUSS atomar sein (kein Halbzustand).
+    - Falls Claim aktiv ist (claim_policy=REQUIRED): MUSS initial setzen:
+      • unclaimed_grace_until (= NOW() + 30d)
+      • claim_deadline (= created_at + 180d)
+  • Verify (USER via Panel → SYSTEM):
+    - Gilt für Panel-User (panel_users.email_verified_at), nicht für vpn_connection.
+    - MUSS idempotent sein (mehrfaches Verify darf keinen Schaden erzeugen).
+    - Hinweis: Panel-Verify ist ein Panel-Contract/Gate (z.B. für Claim/Features), aber keine AAA/VPN-State-Maschine.
+  • Claim (USER via Panel → SYSTEM):
+    - DARF einmalig setzen: claimed_at
+    - DARF NIE ändern: conn_group, fixed_ip, fixed_ipv6, revoked_at, disabled_at.
+  • Claim-Reset (ADMIN-only):
+    - DARF setzen: unclaimed_grace_until = NOW() + 30d (Warnphase neu starten)
+    - DARF NICHT ändern: claim_deadline (Hard-Stop bleibt an created_at gebunden)
+    - Claim-Token wird beim Reset NICHT automatisch rotiert.
+      Rotation/Regenerate ist ein eigener Panel-Flow (USER) bzw. Admin-Runbook-Schritt (siehe 2.1(f) Claim-Token Lifecycle) und ist auditpflichtig.
+  • Disable/Enable (ADMIN):
+    - DARF setzen/clearen: disabled_at
+    - Auditpflicht: wer/wann/warum.
+  • Revoke (ADMIN oder SYSTEM-Policy):
+    - DARF setzen: revoked_at
+    - revoked_at ist monotonic (einmal gesetzt, nie “zurücknehmen”).
+    - “Unrevoke” erfolgt nicht durch DB-Änderung, sondern durch neue vpn_connection (neue Identity).
+  • Reset/Rotate Credentials (ADMIN oder SYSTEM):
+    - DARF ändern: pw_nt_hash (oder credential-version)
+    - Fail-Closed: alte Credentials sofort ungültig; Sessions deterministisch beenden/reconcile.
+
+- Invarianten (MUST):
+  • conn_group ist policytragend; Änderung nur ADMIN + audit (standardmäßig immutable).
+  • fixed_ip immutable; fixed_ipv6 immutable (wenn gesetzt).
+  • connection_login unique (Normalization/Case-Policy muss einheitlich sein).
+  • revoked_at monotonic.
+  • DB down/unknown → fail-closed (kein Allow on error).
+
+- Mini-Tabelle (MUST): Feld → Constraint → immutable? → Write-Path
+  connection_login → UNIQUE → ja (nach Provisioning) → Provisioning (ADMIN/SYSTEM)
+  conn_group       → ENUM {LEGACY,ADMIN,MODERN} → ja* → Provisioning/ADMIN-only (audit)
+  fixed_ip         → UNIQUE (pool-scoped oder global definiert) → ja → Provisioning (Allocator TX)
+  fixed_ipv6       → UNIQUE per Prefix/Pool; nullable für LEGACY → ja → Provisioning (Allocator TX)
+  disabled_at      → nullable timestamp → nein (toggle) → ADMIN-only (audit)
+  revoked_at       → nullable timestamp (monotonic) → ja (monotonic) → ADMIN/SYSTEM (audit)
+  unclaimed_grace_until → nullable timestamp → nein (resettable) → ADMIN-only (Reset; audit) + SYSTEM (Initial bei Provisioning)
+  claim_deadline        → nullable timestamp → ja (nach Initial) → SYSTEM (Initial bei Provisioning; = created_at + 180d; Reset ändert NICHT)
+  claimed_at       → nullable timestamp → ja (once) → SYSTEM (nach User-Claim)
+  pw_nt_hash       → secret hash (NT) → nein (rotate) → ADMIN/SYSTEM (audit)
+
+
+Entscheidung (Norm):
+- Hard-Stop ist rein computed: Wenn claimed_at IS NULL UND now() >= claim_deadline → effective_state führt zu DISABLED (prio 1) und Gate-1/AuthZ ist DENY (Access-Reject).
+Hinweis (Norm): DISABLED durch Hard-Stop beendet bestehende Sessions nicht automatisch; die Wirkung ist „fail-closed für neue Verbindungen“, sofort nur bei explizitem Admin-Session-Kill.
+- Es gibt KEINEN automatischen Übergang in „parked/revoked“ und keine Worker-/Cron-Mutation, die DB-Fakten setzt.
+- Admin-Acknowledge ist optional und rein operativ/UI: Panel kann Hard-Stop als Status/Reason anzeigen; konkrete Aktion bleibt Admin (Claim-Reset / Disable / Revoke / Delete).
+
+Wichtiges Betriebsverhalten (Kanon-treu):
+- Bestehende Sessions werden NICHT automatisch gekappt. Hard-Stop wirkt bei Neuaufbau/Reauth; sofortige Wirkung nur, wenn Admin explizit „Session Kill“ ausführt.
+
+
+19) FEST — Startzeit der 30 Tage (Warnphase) = NOW() (nicht created_at)
+
+Anker: Claim-Policy / SoT-Facts + Initialwerte + Reset (unclaimed_grace_until / claim_deadline).
+
+Entscheidung (Norm):
+- unclaimed_grace_until ist ein Warnphasen-Ende und wird immer relativ zum Zeitpunkt des Setzens berechnet:
+  • Provisioning (SYSTEM/ADMIN): unclaimed_grace_until = NOW() + INTERVAL 30 DAY
+  • Claim-Reset (ADMIN-only):   unclaimed_grace_until = NOW() + INTERVAL 30 DAY
+- created_at ist NICHT Startpunkt der 30 Tage.
+- claim_deadline bleibt getrennt davon und ist an created_at gebunden:
+  • claim_deadline = created_at + INTERVAL 180 DAY
+  • Reset verändert claim_deadline NICHT.
+
+Validierung (DoD):
+- Provisioning-Test: created_at=t0 ⇒ unclaimed_grace_until≈t0+30d, claim_deadline=t0+180d.
+- Reset-Test: Reset bei t1 ⇒ unclaimed_grace_until≈t1+30d, claim_deadline bleibt t0+180d.
+
+
+
+
+4) Restricted Overlay (“Walled Garden”) (MUST)
+    • Restricted Overlay Trigger Set (MUST):
+      - RESTRICT_TRIGGER_STATES (MUST): { UNCLAIMED_OVERDUE }
+      - CLAIM_REQUIRED ist explizit ausgeschlossen: Warnphase/UI-only (kein Restricted Overlay, kein Walled Garden).
+	  Hinweis (Trennung): Restricted Overlay ist claim-policy-basiert (UNCLAIMED_OVERDUE) bzw. Fail-Closed-Fallback bei Unknown/DB-down. Fail2ban ist ein separates Abuse-/Intrusion-Schutzsystem und kein Teil der Claim-Policy.
+      - Erweiterungen (z.B. Quota/Expiry) erfolgen ausschließlich durch Ergänzung von RESTRICT_TRIGGER_STATES (nur mit explizitem GO + Konsistenzprüfung).
+    • restricted_eligible=true gilt nur für LEGACY/MODERN (2.1(e)); ADMIN ist ausgeschlossen.
+    •  Wenn eine Connection in einen restricted effective_state fällt (z.B. UNCLAIMED_OVERDUE),  dann gilt für diese Connection ein deterministischer Minimal-Egress (“Walled Garden”):
+      - Erlaubt:
+        (a) DNS nur zum Service-DNS (3.4): 10.77.0.1 und (für dualstack) fd77:0:0:0::1 (NX-04)
+        (b) Panel/Web nur zum Service-Web (3.4): 10.77.0.3 und (für dualstack) fd77:0:0:0::3
+      - Verboten:
+        (a) jeglicher Internet-Egress (WAN) (v4/v6)
+        (b) jeglicher Zugriff auf andere Client-Zonen (Peer/Sideways)
+        (c) jegliche nicht explizit allowlistete Ports in SERVICE_NET
+    • Fail-Closed: Wenn restricted-Flag nicht eindeutig berechenbar ist (DB down/unknown), gilt restricted (nicht “frei”).
+
+
+
+Cutover-Runbook (Norm, ohne Implementation):
+a) Admin erzeugt neuen PSK.
+b) Admin triggert “Rotation” im Panel (Admin-only), wodurch:
+   - Server-PSK (File-SoT) umgestellt wird,
+   - und eine Benachrichtigung an ALLE betroffenen ACTIVE/CLAIMED User per E-Mail rausgeht (neuer PSK + Cutover-Zeitpunkt).
+c) Wichtiges Betriebsverhalten:
+   - Bestehende VPN-Verbindungen werden NICHT automatisch gekappt.
+   - Neue Aushandlungen/Reconnects nach Cutover benötigen den neuen PSK.
+   - Optional (nur wenn Admin es explizit will): “Session Kill (Scope global)” als separater, bewusster Admin-Schritt.
+
+
+
+  • Ampel (GREEN/YELLOW/RED):
+    - Ampel wird pro Zone + Address-Family über SQL-first Schwellwerte berechnet.
+    - Schwellwerte sind konfigurierbar (keine Hardcodierung in Text/Config).
+    - UI-Mapping (Claim): YELLOW entspricht CLAIM_REQUIRED (Warnphase, kein Restricted Overlay). RED entspricht UNCLAIMED_OVERDUE (Restricted/Walled Garden aktiv).“

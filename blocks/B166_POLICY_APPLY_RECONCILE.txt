@@ -2,8 +2,8 @@ xp-vpn-stack/blocks/B166_POLICY_APPLY_RECONCILE.txt
 ================================================================================
 BLOCK-ID: B166
 TITLE: Policy Apply / Reconcile (SQL→Kernel)
-VERSION: v1.11
-DATUM: 2026-01-14
+VERSION: v1.12
+DATUM: 2026-01-23
 STATUS: ACTIVE
 PRIORITY: MUST
 REQUIRES: B050, B055, B056, B120, B150, B160, B165, B167
@@ -31,7 +31,7 @@ NOTES:
 ================================================================================
 - SQL ist Source of Truth (B050).
 - Enforcement passiert im Kernel:
-  - Restricted Mode über nftables Set (z.B. restricted_v4) (B150).
+- Restricted Mode über nftables Sets restricted_v4 UND restricted_v6 (Dualstack-Parity gemäß B150/F2; IPv6 nur, wenn die Connection fixed_ipv6 hat / v6_addr_policy≠NONE).
   - Speed/QoS über tc pro pppX.
 - Kein SQL pro Paket: DB-Reads/Writes sind Control-Plane (Events/Timer), nicht Datenpfad.
 - Fail-Closed für neue VPN-Logins bleibt unverändert (B050): DB down => deny/reject für ALLE.
@@ -48,7 +48,7 @@ NOTES:
 ================================================================================
 4) SESSION-MAPPING (VORAUSSETZUNG)
 ================================================================================
-- Runtime-Apply ist nur für aktive Sessions möglich.
+
 - Aktive Sessions werden über Mapping-Files aus B165 ermittelt:
   - /run/vpn-sessions/<ppp_if>.env (volatile)
 - Enthält mindestens:
@@ -69,6 +69,59 @@ NOTES:
   - Diese Runtime-Quelle ist führend für Apply (online/offline), Reconcile und Safety-Checks (Janitor-Integration).
 - Offline Connections haben kein Mapping => es gibt nichts am Kernel zu ändern; Policy greift beim nächsten ip-up.
 - Reconcile purgt stale /run/vpn-sessions Mappings deterministisch (PPP_IF muss im Kernel existieren), damit /run als Safety-Quelle zuverlässig bleibt.
+
+4.1) SESSION-MAPPING (VORAUSSETZUNG)
+================================================================================
+- Runtime-Apply ist nur für aktive Sessions möglich.
+- PH1 hat zwei Tunnel-Typen, die im Kernel identisch fail-closed behandelt werden müssen:
+  - LEGACY: PPP (L2TP/PPP; pppd Hooks)
+  - MODERN: IKEv2 (strongSwan; VICI/Event-Listener)
+- Mapping-Files sind volatile Runtime-Artefakte in /run (kein durable State).
+  Sie sind die einzige kanonische Brücke zwischen „Connection in SQL“ und „Session im Kernel“.
+- Namespaces (MUST, Kollisionen vermeiden):
+  - PPP (Legacy):       /run/vpn-sessions/<ppp_if>.env
+  - IKEv2 (Modern):     /run/vpn-sessions/ikev2/active/<IKE_SA_ID>.env
+  - IKEv2 Pending:      /run/vpn-sessions/ikev2/pending/<IKE_SA_ID>.env
+
+- Minimal-Payload-Contract (MUST, für beide Tunnel-Typen):
+  - TUNNEL_TYPE=PPP|IKEV2
+  - CONNECTION_ID=<int>        (vpn_connection_id; DB-id der Connection)
+  - START_TS=<unix>
+  - CLIENT_IP4=<ipv4 oder leer>   (optional; darf leer sein)
+  - CLIENT_IP6=<ipv6 oder leer>   (optional; darf leer sein)
+  - SESSION_ID=<string>           (optional; rein Diagnose/UI, NICHT Kill-Handle)
+
+- Kill-Handle (MUST, Tunnel-abhängig; Fail-Closed/Hardcut muss hierauf basieren):
+  - KILL_HANDLE_TYPE=PPPD_PID|IKE_SA_ID
+  - KILL_HANDLE_VALUE=<int>
+
+- PPP-spezifisch (Legacy):
+  - PPP_IF=pppX
+  - PPPD_PID=<int>  (KILL_HANDLE_TYPE=PPPD_PID)
+  - PPPD_PID Herkunft (MUST):
+    - PPPD_PID MUSS aus dem von pppd/ip-up bereitgestellten Environment stammen.
+    - FORBIDDEN: pgrep/ps zur PID-Ermittlung (Race-Condition / falscher Prozess möglich).
+  - Safety-Check (MUST) vor Kill: PPP_IF + START_TS plausibilisieren (PID-Reuse-Schutz).
+  - PPP-Mapping ist in PH1 „ACTIVE“, sobald ip-up gelaufen ist (kein separate Pending-Phase für PPP).
+
+- IKEv2-spezifisch (Modern):
+  - IKE_SA_ID=<int>  (KILL_HANDLE_TYPE=IKE_SA_ID; Unique/Stable Handle aus VICI)
+  - Conn-Name ist KEIN Kill-Handle (FORBIDDEN für Kill; Mehrdeutigkeit bei schnellen Reconnects).
+  - 2-Stage Mapping (MUST, Race-Free):
+    - Pending-Phase: /run/vpn-sessions/ikev2/pending/<IKE_SA_ID>.env (STAGE=PENDING)
+      * wird vor/zu Beginn des Apply geschrieben, um Kill/Timeout/Janitor deterministisch zu ermöglichen.
+      * ist flüchtig und unterliegt aggressiver Hygiene (siehe RECONCILE/TTL unten).
+    - Active-Phase: /run/vpn-sessions/ikev2/active/<IKE_SA_ID>.env (STAGE=ACTIVE)
+      * wird erst nach SUCCESS von vpn-policy-apply finalisiert (atomar: write-temp + rename).
+    - Norm-Regel: Pending darf niemals „inaktiv“ weiterleben, wenn eine IKE_SA noch existiert.
+      Pending-Expiry ist FAILURE und erzwingt Kill + Cleanup (REV-05).
+
+- Offline Connections haben kein Mapping => es gibt nichts am Kernel zu ändern; Policy greift beim nächsten Connect (PPP ip-up bzw. IKEv2 Event).
+- Reconcile purgt stale /run-Mappings deterministisch:
+  - PPP: Mapping ist stale, wenn PPP_IF nicht existiert.
+  - IKEv2: Mapping ist stale, wenn die referenzierte IKE_SA nicht (mehr) existiert.
+================================================================================
+
 
 ================================================================================
 5) MODI DES TOOLS
@@ -105,9 +158,12 @@ Ablauf: vpn-policy-apply --connection-id=<id>
   - keine Kernel-Änderung möglich/nötig -> "offline noop" (Exit 0)
 
 3) Kernel-Enforcement setzen (ONLINE)
-- nftables Set:
-  - restricted_effective=true  => CLIENT_IP in restricted_v4 hinzufügen
-  - restricted_effective=false => CLIENT_IP aus restricted_v4 entfernen
+- nftables Sets (Dualstack, F2):
+  - Definiere pro Session zwei Adressen:
+    - CLIENT_IP4 = fixed_ip (immer vorhanden)
+    - CLIENT_IP6 = fixed_ipv6 (nur wenn v6_addr_policy≠NONE / nicht NULL)
+  - restricted_effective=true  => CLIENT_IP4 in restricted_v4 hinzufügen; zusätzlich (falls CLIENT_IP6 vorhanden) CLIENT_IP6 in restricted_v6 hinzufügen
+  - restricted_effective=false => CLIENT_IP4 aus restricted_v4 entfernen; zusätzlich (falls CLIENT_IP6 vorhanden) CLIENT_IP6 aus restricted_v6 entfernen
 - tc:
   - speed_profile auf PPP_IF anwenden (tc qdisc/filters replace)
   - falls kein speed limit: definierte Default/cleanup anwenden
@@ -115,7 +171,10 @@ Ablauf: vpn-policy-apply --connection-id=<id>
 3.1) HARD CUT: STATE-FLUSH + FAIL-SAFE (IMMEDIATE ENFORCEMENT für ESTABLISHED Flows)
 - Ziel: Wenn restricted_effective=true wird, müssen auch bereits ESTABLISHED Flows sofort enden (kein Soft Cut).
 - Trigger: Hard Cut nur bei Transition UNRESTRICTED -> RESTRICTED (idempotent, nicht bei jedem Apply).
-  - old_kernel_restricted = (CLIENT_IP ist vor dem Apply bereits Element von restricted_v4)  [Kernel-Pre-Check]
+ - old_kernel_restricted = (
+      CLIENT_IP4 ist vor dem Apply bereits Element von restricted_v4
+      ODER (falls CLIENT_IP6 vorhanden) CLIENT_IP6 ist bereits Element von restricted_v6
+    )  [Kernel-Pre-Check]
   - Pre-Check MUSS vor jeder Änderung am Set erfolgen (sonst ist die Transition-Erkennung nicht zuverlässig).
   - new_restricted = restricted_effective (aus SQL)
 - Kritische Reihenfolge (Race-sicher, MUST):
@@ -161,21 +220,48 @@ Ablauf: vpn-policy-apply --customer-id=<id>
 Ablauf: vpn-policy-apply --reconcile-all  (BEST EFFORT)
 
 1) Ist-Liste (nur aktive Sessions)
-- Enumeriere /run/vpn-sessions/*.env
-- Erzeuge Liste: (vpn_connection_id, client_ip, ppp_if)
+- Enumeriere PPP (Legacy) Mappings:
+  - /run/vpn-sessions/*.env  (nur pppX.env; Namespace ohne Unterordner)
+- Enumeriere IKEv2 (Modern) ACTIVE Mappings:
+  - /run/vpn-sessions/ikev2/active/*.env
+- Erzeuge Ist-Liste (pro aktiver Session):
+  - (tunnel_type, vpn_connection_id, client_ip4?, client_ip6?, kill_handle_type, kill_handle_value, runtime_ref)
 
 0.1) /run Mapping Hygiene (deterministisch)
-- Problem: /run/vpn-sessions kann stale Mapping-Files enthalten (z.B. ip-down nicht gelaufen).
-- Regel: Ein Mapping ist nur gültig, wenn das referenzierte PPP_IF tatsächlich existiert.
+- Ziel: Kein „unmanaged“ Runtime-State; stale Files dürfen keine falschen Safety-Entscheidungen triggern.
 
-Ablauf:
-- Für jedes /run/vpn-sessions/<ppp_if>.env:
-  - Prüfe, ob /sys/class/net/<PPP_IF>/ existiert.
-  - Wenn NICHT existent:
-    - Mapping-File löschen (stale mapping purge)
-    - optional loggen (INFO)
-- Danach erst Ist-Liste aufbauen (nur noch valide Mappings).
+A) PPP (Legacy) Stale Purge:
+- Problem: /run/vpn-sessions kann stale pppX.env enthalten (z.B. ip-down nicht gelaufen).
+- Regel: Ein PPP-Mapping ist nur gültig, wenn das referenzierte PPP_IF tatsächlich existiert.
+- Ablauf:
+  - Für jedes /run/vpn-sessions/<ppp_if>.env:
+    - Prüfe, ob /sys/class/net/<PPP_IF>/ existiert.
+    - Wenn NICHT existent:
+      - Mapping-File löschen (stale mapping purge)
+      - optional loggen (INFO)
 
+B) IKEv2 (Modern) Stale Purge + Pending Hygiene (REV-05):
+- ACTIVE stale purge:
+  - Regel: Ein IKEv2-ACTIVE Mapping ist nur gültig, wenn die referenzierte IKE_SA (IKE_SA_ID) via VICI noch existiert.
+  - Ablauf: Wenn IKE_SA nicht existiert -> Mapping löschen (stale purge) + (falls vorhanden) pending-sets für die IP entfernen (idempotent).
+
+- PENDING Hygiene (aggressiv, Fail-Closed):
+  - Pending-Mappings dürfen nur kurz existieren (Race-Window).
+  - TTL ist ein Settings-Key (SQL-first): pending_ttl_seconds (Default z.B. 30s; keine Hardcodes im Script).
+  - Ablauf:
+    - Für jedes /run/vpn-sessions/ikev2/pending/<IKE_SA_ID>.env:
+      - Ermittle age = now - START_TS (aus File).
+      - Wenn age <= PENDING_TTL_SECONDS: belassen (Apply läuft evtl. noch)
+      - Wenn age > PENDING_TTL_SECONDS:
+        - Pending Expiry gilt als FAILED:
+          * Mapping löschen (pending file)
+          * nft: CLIENT_IP4/CLIENT_IP6 aus connect_pending_v4/connect_pending_v6 entfernen (idempotent)
+          * nft: optional weitere pending-artefakte (falls existieren) entfernen
+          * Wenn IKE_SA noch existiert: TERMINATE (Kill) MUSS ausgelöst werden (KILL_HANDLE_TYPE=IKE_SA_ID).
+            Begründung: verhindert „Ghost Session“ (SA da, aber kein Mapping/Policy).
+        - optional loggen (WARN; reason=pending_ttl_expired, ike_sa_id, connection_id)
+
+- Danach erst Ist-Liste aufbauen (nur noch valide ACTIVE Mappings).
 
 2) Batch SQL Query (performant, kein N+1)
 - Lade effective policy für alle aktiven vpn_connection_ids in einem Batch:
@@ -186,26 +272,35 @@ Ablauf:
 - Fehler einzelner Sessions werden geloggt, Reconcile läuft weiter
 
 4) Restricted-Set Rebuild (deterministisch, EXAKT)
-Ziel:
-- restricted_v4 soll EXAKT den Sollzustand abbilden:
-  desired_restricted_ips = { CLIENT_IP aller aktiven Sessions, bei denen restricted_effective=true }
+Ziel (Dualstack, F2):
+- restricted_v4 soll EXAKT den Sollzustand für IPv4 abbilden:
+  desired_restricted_ips_v4 = { fixed_ip aller aktiven Sessions, bei denen restricted_effective=true }
+- restricted_v6 soll EXAKT den Sollzustand für IPv6 abbilden:
+  desired_restricted_ips_v6 = { fixed_ipv6 aller aktiven Sessions, bei denen restricted_effective=true UND fixed_ipv6 nicht NULL }
+  (LEGACY hat kein fixed_ipv6 → trägt nur zu v4 bei)
 
 Ablauf:
-- Baue aus Schritt (1)+(2) die Sollmenge:
+- Baue aus Schritt (1)+(2) beide Sollmengen:
   - Für jede aktive Session:
-    - wenn SQL restricted_effective=true -> CLIENT_IP in desired_restricted_ips aufnehmen
-- Setze Kernel-Zustand deterministisch auf Soll (EXAKT, ohne Leak-Window):
-  - Ermittle Kernel-Istzustand:
-    - current_restricted_ips = Elemente aus restricted_v4 (Kernel)
+    - wenn SQL restricted_effective=true:
+      - fixed_ip → desired_restricted_ips_v4 aufnehmen
+      - fixed_ipv6 (falls nicht NULL) → desired_restricted_ips_v6 aufnehmen
+- Setze Kernel-Zustand deterministisch auf Soll (EXAKT, ohne Leak-Window) – für beide Sets in einer atomaren Transaktion:
+  - Ermittle Kernel-Istzustände:
+    - current_restricted_ips_v4 = Elemente aus restricted_v4 (Kernel)
+    - current_restricted_ips_v6 = Elemente aus restricted_v6 (Kernel)
   - Delta bestimmen:
-    - to_add = desired_restricted_ips \ current_restricted_ips
-    - to_del = current_restricted_ips \ desired_restricted_ips
-  - Set-Update (deterministisch):
-    - MUST: Update in EINER atomaren nftables Transaktion/Commit (ein einziger nft-Batch/Netlink-Commit).
-    - to_del löschen (stale Elemente entfernen)
-    - to_add hinzufügen (fehlende Elemente ergänzen)
+    - to_add_v4 = desired_restricted_ips_v4 \ current_restricted_ips_v4
+    - to_add_v6 = desired_restricted_ips_v6 \ current_restricted_ips_v6
+    - to_del_v4 = current_restricted_ips_v4 \ desired_restricted_ips_v4
+    - to_del_v6 = current_restricted_ips_v6 \ desired_restricted_ips_v6
     - Hinweis: "FLUSH + rebuild" ist nur erlaubt, wenn Flush+Add garantiert im selben atomaren Commit passiert (kein separater Flush-Call).
-    - HARD CUT bei Drift-Fix (best effort):
+  - Set-Update (deterministisch):
+    - MUST: Update beider Sets in EINER atomaren nftables Transaktion/Commit (ein einziger nft-Batch/Netlink-Commit).
+    - to_del_* löschen (stale Elemente entfernen)
+    - to_add_* hinzufügen (fehlende Elemente ergänzen)
+    - Hinweis: "FLUSH + rebuild" ist nur erlaubt, wenn Flush+Add im selben atomaren Commit passiert (kein separater Flush-Call).
+ - HARD CUT bei Drift-Fix (best effort):
       - Für jede IP in to_add (neu restricted durch Reconcile): nach erfolgreichem nft-Commit MUSS versucht werden,
         Conntrack-States der IP zu löschen (bidirektional), damit auch bestehende ESTABLISHED Flows sofort gekappt werden.
       - Wenn Conntrack-Flush fehlschlägt oder unavailable ist:
@@ -214,6 +309,25 @@ Ablauf:
       - Fehlerbehandlung im Reconcile:
         - Flush fail, aber PPP Kill erfolgreich => log WARN ("hard_cut_fallback=ppp_kill"), Reconcile läuft weiter.
         - Flush fail und PPP Kill fail => log ERROR, Reconcile läuft weiter; Ergebnis "partial" (Exit 1) wenn solche Fehler auftraten.
+- IKEv2 Apply Fail-Closed Test (Gate-1 FAIL nach Gate-0 OK):
+  - Setup: Trusted Server-Cert (Gate-0 OK), falsches Passwort (Gate-1 FAIL).
+  - Erwartung: Kein unpoliced window:
+    - Pending Gate bleibt aktiv bis Cleanup/Terminate.
+    - IKE_SA wird terminiert (Kill by IKE_SA_ID), Client muss reconnecten.
+    - Kein WAN-Traffic möglich; Logs zeigen action=terminate reason=apply_fail.
+
+- IKEv2 Pending TTL Kill-on-expire Test (REV-05):
+  - Setup: Simuliere langsame/blocked DB (vpn-policy-apply hängt oder timeouts), aber IKE_SA/CHILD_SA existiert.
+  - Erwartung nach pending_ttl_seconds:
+    - pending mapping wird gelöscht
+    - connect_pending_v4/v6 wird bereinigt (idempotent)
+    - IKE_SA wird zwingend terminiert (Kill by IKE_SA_ID)
+    - Ergebnis ist ein sauberer Reconnect statt „Ghost Session“.
+
+- IPv6-only Session Robustness Test (Modern):
+  - Setup: IKEv2 Session mit nur CLIENT_IP6 (CLIENT_IP4 leer).
+  - Erwartung: Keine Script/Parser-Brüche; pending/active handling funktioniert; connect_pending_v6 wird genutzt; alle Remove-Pfade sind tolerant.
+
 Ergebnis:
 - Keine Drift möglich: stale IPs verschwinden garantiert
 - Unlock/Verify/Quota wirkt spätestens <=5 Minuten, auch wenn Event verpasst wurde
@@ -306,7 +420,7 @@ Offline ist KEIN Fehler:
 13) TESTS (MINIMUM)
 ================================================================================
 - Connect Apply Test: PPP connect -> ip-up ruft single apply -> restricted/tc sofort gesetzt.
-- Panel Event Test: Quota reset/refill oder Expiry extend oder Manual Restrict/Unrestrict -> apply -> restricted_v4 sofort angepasst.
+- Panel Event Test: Quota reset/refill oder Expiry extend oder Manual Restrict/Unrestrict -> apply -> restricted_v4 UND (bei Dualstack-Connections) restricted_v6 sofort angepasst.
 - Hard Cut (ESTABLISHED) Test: Starte einen großen Download/Stream über VPN (Flow ESTABLISHED). Setze restricted_effective=true (Quota/Manual/Expiry) und triggere apply.
   Erwartung: Datenfluss wird sofort unterbrochen (Conntrack-Flush), danach nur allowlist zu 10.77.0.1 möglich.
 - Hard Cut Fallback Test (Flush unavailable/fail):
@@ -317,25 +431,26 @@ Offline ist KEIN Fehler:
   - Client ist restricted_effective=true in SQL, aber CLIENT_IP ist manuell aus restricted_v4 entfernt.
   - Starte Datenfluss (ESTABLISHED) ins WAN.
   - Reconcile läuft: IP kommt zurück ins Set (to_add) UND Flow wird sofort gekappt (Conntrack-Flush im Reconcile).
-- Atomic Update Safety Test: Während Reconcile läuft darf kein Leak-Window entstehen (kein Zeitraum, in dem restricted_v4 "leer" ist, obwohl desired non-empty).
+- Atomic Update Safety Test: Während Reconcile läuft darf kein Leak-Zeitraum entstehen, in dem restricted_v4 ODER restricted_v6 "leer" ist, obwohl desired non-empty).
   Validierung pragmatisch: Dauertraffic + paralleles Reconcile; es darf niemals WAN-Traffic für restricted Clients durchkommen.
 - Missed Event Drift Test: Panel Änderung ohne apply -> Reconcile korrigiert <=5 Minuten.
-- Stale Cleanup Test: Disconnect ohne cleanup -> Reconcile entfernt stale IP aus restricted_v4.
+- Stale Cleanup Test: Disconnect ohne cleanup -> Reconcile entfernt stale IP aus restricted_v4 und (falls vorhanden) restricted_v6.
 - SQL Down Test: apply/reconcile -> Exit 2; keine neuen VPN-Logins (Fail-Closed). Nach DB up -> Reconcile korrigiert.
 - Strict vs Best Effort Test:
   - Single apply: nft Fehler -> Exit 4
   - Reconcile: ein Session-Fehler -> Exit 1, andere Sessions werden korrigiert
 - Stale /run Mapping Purge Test: /run enthält pppX.env aber /sys/class/net/pppX fehlt -> Reconcile löscht Mapping -> verhindert false "live" Safety-Blockade.
-- Restricted Set Rebuild Test: restricted_v4 enthält manuell/stale IPs -> Reconcile delta-update (to_del/to_add, atomarer Commit) -> Set enthält exakt desired_restricted_ips (aktive+restricted=true), sonst nichts.
+- Restricted Set Rebuild Test: restricted_v4/restricted_v6 enthalten manuell/stale IPs -> Reconcile stellt exakt desired_restricted_ips_v4 bzw. desired_restricted_ips_v6 (aktive+restricted=true), sonst nichts.
 - Connect No-Leak Gate Test (D1a):
   - Simuliere Delay im Connect-Pfad (z.B. vpn-policy-apply sleep 10).
-  - Erwartung: Während connect_pending_v4 aktiv ist, fließt kein Forward-Traffic (WAN=0), auch wenn PPP bereits „up“ ist.
+  - Erwartung: Während connect_pending_v4 (und für Dualstack conn_groups zusätzlich connect_pending_v6) aktiv ist, fließt kein Forward-Traffic (WAN=0), auch wenn PPP bereits „up“ ist.
   - Nach SUCCESS: Gate entfernt, dann gilt restricted/full gemäß SQL.
   - Bei TEMPFAIL_SQL oder Timeout: PPP Kill, Gate bleibt bis Cleanup; kein Traffic-Leak.
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.12 (2026-01-23): NX-05 IKEv2 Session-Mapping ergänzt (Namespaces + Kill-Handle IKE_SA_ID); 2-Stage Pending/Active; Pending TTL als SQL-Setting + Kill-on-expire; Reconcile Ist-Liste/Hygiene erweitert; IKEv2 Fail-Closed Tests ergänzt.
 - v1.11 (2026-01-14): Konsistenz/Redaktion: Header-DATUM aktualisiert; REQUIRES vervollständigt (B055/B056/B120/B165/B167); Terminologie präzisiert (CONNECTION_ID ist Env-Key, semantisch vpn_connection_id; CLI-Hinweis ergänzt). Keine Logikänderung.
 - v1.10 (2026-01-10): D1a Connect-Gate integriert: connect_pending_v4 Semantik bei DB-down/Apply-Fail dokumentiert + Acceptance-Test „No-Leak Gate“ ergänzt (Verweis B167/D009).
 - v1.9 (2026-01-09): Kill-Handle kanonisiert: PPPD_PID als MUST, mit Plausibilitätscheck über PPP_IF + START_TS; SESSION_ID ausdrücklich nur Diagnose.

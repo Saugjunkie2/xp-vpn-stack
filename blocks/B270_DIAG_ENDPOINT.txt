@@ -2,12 +2,12 @@ xp-vpn-stack/blocks/B270_DIAG_ENDPOINT.txt
 ================================================================================
 BLOCK-ID: B270
 TITLE: Diagnose Endpoint /diag
-VERSION: v1.0
-DATUM: 2026-01-06
+VERSION: v1.4
+DATUM: 2026-01-21
 STATUS: ACTIVE
 PRIORITY: MUST
-REQUIRES: B220
-INFLUENCES: alle
+REQUIRES: B055, B060, B061, B150, B200, B220, B260, 02_GLOSSAR.txt, docs/nft_service_ip_scopes.txt
+INFLUENCES: B210, B230, B240
 OWNER-INTENT: "Erste Hilfe" für Support und Setup-Tool.
 OWNER: Marco (Owner) + ChatGPT (Co-Architect)
 
@@ -26,38 +26,64 @@ NOTES:
   - basic reachability
 
 2) GRENZEN
-- No sensitive data; should be safe to expose to user net.
+- Keine Secrets/PII: User/Restricted dürfen nur „harmlosen“ Status sehen; erweiterte Diagnosen (Admin-Sicht) sind strikt scope-gebunden (ADMIN_VPN_NET 10.77.2.0/24 via nft/Policy).
 
 3) ABHÄNGIGKEITEN
-- Requires: B220
+- Requires: B055, B060, B150, B200, B220, B260, 02_GLOSSAR.txt, docs/nft_service_ip_scopes.txt
 
 4) INPUTS
-- Client request on 10.77.0.1
-- Server can query dns/time metrics
+- Client request on SERVICE_WEB 10.77.0.3 (tcp/80 + tcp/443) via VPN; niemals WAN-exposed.
+- Server kann DNS/Time/Policy-Checks ausführen (DNS Stack aus B200, Time/NTP aus B260, Restricted/Allowlist aus B150).
 
 5) OUTPUTS
-- JSON or plain text:
-  - Your_IP
-  - DNS_Check
-  - Time_Drift
-  - Optional: throughput quick test
+- JSON oder plain text (stable schema, versioniert):
+  - diag_version (Schema-Version, z.B. "v1")
+  - trace_id / request_id (korrelierbar für Logs/Support)
+  - client_ip (Source-IP)
+- conn_group (LEGACY/ADMIN/MODERN; SQL-first aus vpn_connections.conn_group (B055); niemals aus IP-Ranges “ableiten/erraten”; Ableitungsnormen: B058)
+  - effective_state / restricted_flag (hochlevel, ohne interne Secrets)
+  - v6_addr_policy (NONE|FIXED_SQL; SQL-first; aus conn_group/DB abgeleitet; Bezug: B055/B061)
+  - ip_slot (Slot-ID als SoT; SQL-first; Bezug: B055/B061)
+  - fixed_ip (IPv4; materialisiert aus ip_slot; PPP/Framed-IP; Bezug: B055/B061)
+  - fixed_ipv6 (IPv6; materialisiert aus ip_slot wenn v6_addr_policy=FIXED_SQL; sonst NULL; Bezug: B055/B061)
+  - restricted_reason (nur Code/Label, keine Freitext-Secrets)
+  - dns:
+    - enforced_v4_expected (ja/nein; Erwartung aus B210)
+    - resolver_ip_expected (SERVICE_DNS 10.77.0.1)
+    - tcp53_ok / udp53_ok (ja/nein)
+  - time:
+    - ntp_target_expected (SERVICE_NTP 10.77.0.4)
+    - time_drift_seconds (numerisch oder "unknown")
+  - reachability:
+    - service_web (10.77.0.3) ok (ja/nein)
+    - optional: minimaler „ping/icmp“ Hinweis, falls aktiviert
+- Optional (nur Admin-Scope): erweiterte Counters/Policy-Infos (ohne Secrets), z.B. „DNS-DNAT counters vorhanden“, „restricted_set match ja/nein“.
 
 6) MUST (wenn aktiv)
-- Minimal, stable format
-- No DB secrets
+- Minimal, stable format (Schema-Version + stabile Feldnamen; keine „random“ Änderungen ohne Changelog)
+- Keine Secrets/PII (keine Tokens/Keys/PSKs, keine Account-Details, keine vollständigen DB-Dumps)
+- Scope Enforcement: User/Restricted sehen nur safe subset; Admin-only Zusatzinfos nur aus ADMIN_VPN_NET (10.77.2.0/24)
+- Abuse-Guard: Rate-Limit pro Source-IP (sonst kann /diag zum Log/CPU-Flood werden)
 
 7) OPTIONAL
 - Provide human readable page too.
 
 8) FEHLERBILDER
-- diag unreachable -> web/firewall down.
-- time drift huge -> NTP not working.
+- /diag unreachable -> SERVICE_WEB down (B220 bind) oder nft scope falsch (SERVICE_WEB 10.77.0.3:80/443 nicht erreichbar über VPN).
+- time drift huge -> NTP nicht erreichbar (SERVICE_NTP 10.77.0.4:123/udp) oder Client-Time kaputt; Folge: TLS/HTTPS kann fehlschlagen.
 
 9) TESTS
-- Setup tool button gets green.
+- User (LEGACY/MODERN, nicht restricted): /diag auf SERVICE_WEB 10.77.0.3 ist erreichbar (80/443); DNS expected = 10.77.0.1; NTP expected = 10.77.0.4.
+- Restricted (B150 aktiv): /diag bleibt erreichbar (weil SERVICE_WEB 10.77.0.3:80/443 Allowlist), WAN bleibt blockiert.
+- Admin (10.77.2.0/24): sieht optional erweiterte Diagnosen (Admin-Scope).
+- WAN: /diag ist NICHT erreichbar (weder Bind noch Firewall dürfen WAN exposure zulassen).
 
 ================================================================================
 CHANGELOG
 ================================================================================
+- v1.4 (2026-01-21): Thema I: /diag Output um ip_slot + fixed_ip + fixed_ipv6 + v6_addr_policy ergänzt; REQUIRES um B061 erweitert.
+- v1.3 (2026-01-21): conn_group Output-Zeile um Ableitungsnormen-Referenz ergänzt (B058).
+- v1.2 (2026-01-20): K2: conn_group im /diag Output auf SQL-first SoT gedreht (B055) statt “ableitbar”; REQUIRES um B055 + 02_GLOSSAR ergänzt.
+- v1.1 (2026-01-20): /diag auf SERVICE_WEB 10.77.0.3 (80/443) umgestellt; REQUIRES/INFLUENCES konsistent zu B060/B150/B200/B260 + docs/nft_service_ip_scopes.txt; Output-Schema (IDs/States/DNS/NTP) präzisiert, Admin-Scope (10.77.2.0/24) + Rate-Limit als MUST ergänzt; Tests/Fehlerbilder auf SERVICE_* Targets aktualisiert.
 - v1.0: Initial
 ================================================================================
